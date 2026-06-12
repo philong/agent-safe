@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+HERE="$(realpath .)"
+echo "Entering sandbox for $HERE"
+bwrap \
+  --ro-bind / / \
+  --bind ~/.pi ~/.pi \
+  --dev-bind /dev/null /dev/null \
+  --dev-bind /dev/urandom /dev/urandom \
+  --tmpfs /tmp \
+  --bind "$HERE" "$HERE" \
+  --setenv PS1 "sandbox$ " \
+  sh -c "cd $HERE && exec $(which pi) $*"
