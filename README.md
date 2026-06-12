@@ -27,7 +27,7 @@ sudo pacman -S bubblewrap ripgrep
 The script lives in `~/.local/bin/`, the standard user scripts directory on Linux. Make sure it's in your `PATH`.
 
 ```bash
-curl -o ~/.local/bin/pi-safe https://raw.githubusercontent.com/<you>/pi-safe/main/pi-safe
+curl -o ~/.local/bin/pi-safe https://raw.githubusercontent.com/dimaginar/pi-safe/main/pi-safe
 chmod +x ~/.local/bin/pi-safe
 ```
 
