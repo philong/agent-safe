@@ -4,9 +4,9 @@ set -euo pipefail
 PI_BIN="$(command -v pi)" || { echo "pi-safe: 'pi' not found in PATH" >&2; exit 1; }
 command -v bwrap >/dev/null 2>&1 || { echo "pi-safe: 'bwrap' not found in PATH" >&2; exit 1; }
 HERE="$(realpath .)"
+: "${HOME:?pi-safe: HOME is not set}"
 mkdir -p ~/.pi ~/.gemini 2>/dev/null || true
 PI_DIR="$(realpath ~/.pi)" || { echo "pi-safe: cannot resolve ~/.pi" >&2; exit 1; }
-GEMINI_DIR="$(realpath ~/.gemini)" || { echo "pi-safe: cannot resolve ~/.gemini" >&2; exit 1; }
 
 PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
 
@@ -41,15 +41,123 @@ if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
 fi
 
+# Writable paths for build tooling.
+#
+# These are deliberately narrow: only directories holding downloaded artifacts
+# and compiled output, never a tool's root directory. Roots such as ~/.cargo,
+# ~/.local/share or ~/.nvm hold executables that are on your PATH, and config
+# that runs on the next build (~/.cargo/config.toml, ~/.gradle/init.d,
+# ~/.m2/settings.xml). Making those writable would let the agent plant code
+# that later runs OUTSIDE the sandbox, which defeats the point of pi-safe.
+CACHE_DIRS=(
+  # Agent config: extensions, AGENTS.md
+  "$HOME/.pi"
+  "$HOME/.gemini"
+
+  # JVM
+  "$HOME/.m2/repository"
+  "$HOME/.gradle/caches"
+  "$HOME/.gradle/wrapper"
+  "$HOME/.gradle/native"
+  "$HOME/.ivy2/cache"
+  "$HOME/.cache/coursier"
+
+  # Rust
+  "$HOME/.cargo/registry"
+  "$HOME/.cargo/git"
+
+  # Go
+  "$HOME/go/pkg/mod"
+  "$HOME/.cache/go-build"
+
+  # Node
+  "$HOME/.npm/_cacache"
+  "$HOME/.pnpm-store"
+  "$HOME/.cache/yarn"
+  "$HOME/.yarn/berry/cache"
+  "$HOME/.bun/install/cache"
+  "$HOME/.cache/deno"
+  "$HOME/.cache/node-gyp"
+  "$HOME/.cache/ms-playwright"
+
+  # Python
+  "$HOME/.cache/pip"
+  "$HOME/.cache/uv"
+  "$HOME/.cache/pypoetry"
+
+  # .NET, PHP, Dart, Ruby, Haskell, Elixir
+  "$HOME/.nuget/packages"
+  "$HOME/.cache/composer"
+  "$HOME/.pub-cache/hosted"
+  "$HOME/.pub-cache/git"
+  "$HOME/.gem/cache"
+  "$HOME/.cabal/packages"
+  "$HOME/.stack/pantry"
+  "$HOME/.hex/packages"
+
+  # Version manager download caches (not the installed toolchains)
+  "$HOME/.cache/mise"
+)
+
+# Left read-only on purpose:
+#   ~/.local/share       .desktop files, systemd user units, mise/pipx installs
+#   ~/.cache/pre-commit  hook environments, executed by git outside the sandbox
+#   ~/.nvm ~/.pyenv ~/.asdf ~/.sdkman ~/.rustup ~/.cargo/bin ~/.bun/bin
+#                        interpreters and shims that are on your PATH
+# Installing a toolchain or a global CLI therefore has to happen outside pi-safe.
+
+# Escape hatch: PI_SAFE_WRITE=/path/one:/path/two pi-safe
+if [ -n "${PI_SAFE_WRITE:-}" ]; then
+  IFS=':' read -r -a extra_dirs <<<"$PI_SAFE_WRITE"
+  CACHE_DIRS+=("${extra_dirs[@]}")
+fi
+
+BIND_ARGS=()
+bound=""
+
+add_bind() {
+  local path="$1" mode="${2:---bind}" real
+  real="$(realpath -q "$path")" || return 0
+  [ -e "$real" ] || return 0
+  case ":$bound:" in *":$mode $real:"*) return 0 ;; esac
+  bound="$bound:$mode $real"
+  BIND_ARGS+=("$mode" "$real" "$real")
+}
+
+for dir in "${CACHE_DIRS[@]}"; do
+  # Create a cache dir only when its tool is already installed, i.e. when the
+  # parent exists, so pi-safe never litters $HOME for tools you do not use.
+  parent="$(dirname "$dir")"
+  if [ ! -d "$dir" ] && [ "$parent" != "$HOME" ] && [ -d "$parent" ]; then
+    mkdir -p "$dir" 2>/dev/null || true
+  fi
+  add_bind "$dir"
+done
+
+# Git worktrees and repo subdirectories: the real .git lives outside $HERE, and
+# git refuses to commit without write access to it. Keep the parts git executes
+# on the host read-only, so this cannot become a way out of the sandbox.
+if git_common="$(git -C "$HERE" rev-parse --git-common-dir 2>/dev/null)"; then
+  git_common="$(cd "$HERE" && realpath -q "$git_common")" || git_common=""
+  if [ -n "$git_common" ] && [ "${git_common#"$HERE"/}" = "$git_common" ]; then
+    mkdir -p "$git_common/hooks" 2>/dev/null || true
+    add_bind "$git_common"
+    add_bind "$git_common/hooks" --ro-bind
+    add_bind "$git_common/config" --ro-bind
+  fi
+fi
+
+# No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
+# through the read-only bind of /, so a forwarded agent is already reachable.
+
 echo "Entering sandbox for $HERE"
 bwrap \
   --ro-bind / / \
-  --bind "$PI_DIR" "$PI_DIR" \
-  --bind "$GEMINI_DIR" "$GEMINI_DIR" \
   --dev-bind /dev/null /dev/null \
   --dev-bind /dev/urandom /dev/urandom \
   --tmpfs /tmp \
   "${BWRAP_ARGS[@]}" \
+  "${BIND_ARGS[@]}" \
   --bind "$HERE" "$HERE" \
   --chdir "$HERE" \
   --setenv PS1 "sandbox$ " \
