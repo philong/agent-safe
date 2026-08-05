@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 HERE="$(realpath .)"
+mkdir -p ~/.pi
+PI_DIR="$(realpath ~/.pi)"
 echo "Entering sandbox for $HERE"
 bwrap \
   --ro-bind / / \
-  --bind ~/.pi ~/.pi \
+  --bind "$PI_DIR" "$PI_DIR" \
   --dev-bind /dev/null /dev/null \
   --dev-bind /dev/urandom /dev/urandom \
   --tmpfs /tmp \
