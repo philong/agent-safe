@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+PI_BIN="$(command -v pi)" || { echo "pi-safe: 'pi' not found in PATH" >&2; exit 1; }
 HERE="$(realpath .)"
-mkdir -p ~/.pi
-PI_DIR="$(realpath ~/.pi)"
+mkdir -p ~/.pi 2>/dev/null || true
+PI_DIR="$(realpath ~/.pi)" || { echo "pi-safe: cannot resolve ~/.pi" >&2; exit 1; }
+
 echo "Entering sandbox for $HERE"
-bwrap \
+exec bwrap \
   --ro-bind / / \
   --bind "$PI_DIR" "$PI_DIR" \
   --dev-bind /dev/null /dev/null \
   --dev-bind /dev/urandom /dev/urandom \
   --tmpfs /tmp \
   --bind "$HERE" "$HERE" \
+  --chdir "$HERE" \
   --setenv PS1 "sandbox$ " \
-  sh -c "cd $HERE && exec $(which pi) $*"
+  "$PI_BIN" "$@"
