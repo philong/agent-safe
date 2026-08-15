@@ -6,8 +6,30 @@ HERE="$(realpath .)"
 mkdir -p ~/.pi 2>/dev/null || true
 PI_DIR="$(realpath ~/.pi)" || { echo "pi-safe: cannot resolve ~/.pi" >&2; exit 1; }
 
+set_yolo_mode() {
+  local mode="$1"
+  local config_file="$PI_DIR/agent/extensions/pi-permission-system/config.json"
+  if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
+    local tmp_file
+    tmp_file="$(mktemp "${config_file}.tmp.XXXXXX" 2>/dev/null || mktemp)"
+    if jq --argjson val "$mode" '.yoloMode = $val' "$config_file" > "$tmp_file" 2>/dev/null; then
+      mv "$tmp_file" "$config_file"
+    else
+      rm -f "$tmp_file"
+    fi
+  fi
+}
+
+cleanup() {
+  trap - EXIT INT TERM
+  set_yolo_mode false
+}
+
+set_yolo_mode true
+trap cleanup EXIT INT TERM
+
 echo "Entering sandbox for $HERE"
-exec bwrap \
+bwrap \
   --ro-bind / / \
   --bind "$PI_DIR" "$PI_DIR" \
   --dev-bind /dev/null /dev/null \
