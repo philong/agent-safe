@@ -28,6 +28,11 @@ cleanup() {
 set_yolo_mode true
 trap cleanup EXIT INT TERM
 
+BWRAP_ARGS=()
+if [[ -d /etc/ssh/ssh_config.d ]]; then
+  BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
+fi
+
 echo "Entering sandbox for $HERE"
 bwrap \
   --ro-bind / / \
@@ -35,6 +40,7 @@ bwrap \
   --dev-bind /dev/null /dev/null \
   --dev-bind /dev/urandom /dev/urandom \
   --tmpfs /tmp \
+  "${BWRAP_ARGS[@]}" \
   --bind "$HERE" "$HERE" \
   --chdir "$HERE" \
   --setenv PS1 "sandbox$ " \
