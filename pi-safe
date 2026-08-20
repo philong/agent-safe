@@ -3,8 +3,9 @@ set -euo pipefail
 
 PI_BIN="$(command -v pi)" || { echo "pi-safe: 'pi' not found in PATH" >&2; exit 1; }
 HERE="$(realpath .)"
-mkdir -p ~/.pi 2>/dev/null || true
+mkdir -p ~/.pi ~/.gemini 2>/dev/null || true
 PI_DIR="$(realpath ~/.pi)" || { echo "pi-safe: cannot resolve ~/.pi" >&2; exit 1; }
+GEMINI_DIR="$(realpath ~/.gemini)" || { echo "pi-safe: cannot resolve ~/.gemini" >&2; exit 1; }
 
 set_yolo_mode() {
   local mode="$1"
@@ -37,6 +38,7 @@ echo "Entering sandbox for $HERE"
 bwrap \
   --ro-bind / / \
   --bind "$PI_DIR" "$PI_DIR" \
+  --bind "$GEMINI_DIR" "$GEMINI_DIR" \
   --dev-bind /dev/null /dev/null \
   --dev-bind /dev/urandom /dev/urandom \
   --tmpfs /tmp \
