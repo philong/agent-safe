@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: pi-web-safe [project-dir] [pi-web args...]" >&2
+  echo "  Runs pi-web (pnpx @agegr/pi-web@latest --hostname 0.0.0.0) in a bubblewrap" >&2
+  echo "  sandbox where the project directory, ~/.pi, and ~/.gemini are writable; everything" >&2
+  echo "  else read-only. Defaults to the current directory if [project-dir] is omitted." >&2
+  echo "  Enables pi-permission-system yolo mode for the run; restored on exit." >&2
+  echo "  Remember to pick the project dir as the session cwd in the pi-web UI." >&2
+  exit 1
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+fi
+
+# First non-flag argument is the project dir; default to current directory
+PROJECT_DIR="$PWD"
+if [[ $# -gt 0 && "$1" != -* ]]; then
+  PROJECT_DIR="$1"
+  shift
+fi
+PROJECT_DIR="$(realpath -e -- "$PROJECT_DIR")" || { echo "pi-web-safe: cannot resolve project dir: $PROJECT_DIR" >&2; exit 1; }
+
+command -v pnpx >/dev/null 2>&1 || { echo "pi-web-safe: 'pnpx' not found in PATH" >&2; exit 1; }
+command -v bwrap >/dev/null 2>&1 || { echo "pi-web-safe: 'bwrap' not found in PATH" >&2; exit 1; }
+
+PI_DIR="$HOME/.pi"
+mkdir -p "$PI_DIR"
+PI_DIR="$(realpath -e "$PI_DIR")"
+
+GEMINI_DIR="$HOME/.gemini"
+mkdir -p "$GEMINI_DIR"
+GEMINI_DIR="$(realpath -e "$GEMINI_DIR")"
+
+PNPM_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
+mkdir -p "$PNPM_CACHE_DIR"
+PNPM_CACHE_DIR="$(realpath -e "$PNPM_CACHE_DIR")"
+
+PNPM_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+mkdir -p "$PNPM_DATA_DIR"
+PNPM_DATA_DIR="$(realpath -e "$PNPM_DATA_DIR")"
+
+PNPM_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
+mkdir -p "$PNPM_STATE_DIR"
+PNPM_STATE_DIR="$(realpath -e "$PNPM_STATE_DIR")"
+
+# --- yolo mode handling (ported from pi-safe) ---
+PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
+
+set_yolo_mode() {
+  local mode="$1"
+  if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+    local tmp_file
+    tmp_file="$(mktemp "${PERM_CONFIG}.tmp.XXXXXX" 2>/dev/null || mktemp)" || return 1
+    if jq --argjson val "$mode" '.yoloMode = $val' "$PERM_CONFIG" > "$tmp_file" 2>/dev/null; then
+      mv "$tmp_file" "$PERM_CONFIG"
+    else
+      rm -f "$tmp_file"
+    fi
+  fi
+}
+
+PREV_YOLO="false"
+if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+  PREV_YOLO="$(jq -r '.yoloMode // false' "$PERM_CONFIG" 2>/dev/null || echo false)"
+fi
+
+cleanup() {
+  trap - EXIT INT TERM
+  set_yolo_mode "$PREV_YOLO"
+}
+trap cleanup EXIT INT TERM
+
+set_yolo_mode true
+[[ "$PREV_YOLO" == "true" ]] || echo "pi-web-safe: yolo mode enabled (was: $PREV_YOLO), will restore on exit"
+# --- end yolo mode handling ---
+
+BWRAP_ARGS=(
+  --ro-bind / /
+  --bind "$PI_DIR" "$PI_DIR"
+  --bind "$GEMINI_DIR" "$GEMINI_DIR"
+  --bind "$PNPM_CACHE_DIR" "$PNPM_CACHE_DIR"
+  --bind "$PNPM_DATA_DIR" "$PNPM_DATA_DIR"
+  --bind "$PNPM_STATE_DIR" "$PNPM_STATE_DIR"
+  --dev-bind /dev/null /dev/null
+  --dev-bind /dev/urandom /dev/urandom
+  --tmpfs /tmp
+  --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  --chdir "$PROJECT_DIR"
+  --setenv PS1 "sandbox$ "
+)
+
+if [[ -n "${PNPM_HOME:-}" ]]; then
+  mkdir -p "$PNPM_HOME"
+  PNPM_HOME_REAL="$(realpath -e "$PNPM_HOME")"
+  if [[ "$PNPM_HOME_REAL" != "$PNPM_DATA_DIR" ]]; then
+    BWRAP_ARGS+=(--bind "$PNPM_HOME_REAL" "$PNPM_HOME_REAL")
+  fi
+fi
+
+if [[ -d /etc/ssh/ssh_config.d ]]; then
+  BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
+fi
+
+echo "pi-web-safe: sandboxed, writable project: $PROJECT_DIR"
+echo "pi-web-safe: ~/.pi ($PI_DIR) and ~/.gemini ($GEMINI_DIR) writable, /tmp tmpfs, everything else read-only"
+echo "pi-web-safe: pick $PROJECT_DIR as the session cwd in the pi-web UI"
+
+bwrap "${BWRAP_ARGS[@]}" pnpx "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@"
+rc=$?
+exit "$rc"
