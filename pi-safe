@@ -2,32 +2,39 @@
 set -euo pipefail
 
 PI_BIN="$(command -v pi)" || { echo "pi-safe: 'pi' not found in PATH" >&2; exit 1; }
+command -v bwrap >/dev/null 2>&1 || { echo "pi-safe: 'bwrap' not found in PATH" >&2; exit 1; }
 HERE="$(realpath .)"
 mkdir -p ~/.pi ~/.gemini 2>/dev/null || true
 PI_DIR="$(realpath ~/.pi)" || { echo "pi-safe: cannot resolve ~/.pi" >&2; exit 1; }
 GEMINI_DIR="$(realpath ~/.gemini)" || { echo "pi-safe: cannot resolve ~/.gemini" >&2; exit 1; }
 
+PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
+
 set_yolo_mode() {
   local mode="$1"
-  local config_file="$PI_DIR/agent/extensions/pi-permission-system/config.json"
-  if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
+  if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
     local tmp_file
-    tmp_file="$(mktemp "${config_file}.tmp.XXXXXX" 2>/dev/null || mktemp)"
-    if jq --argjson val "$mode" '.yoloMode = $val' "$config_file" > "$tmp_file" 2>/dev/null; then
-      mv "$tmp_file" "$config_file"
+    tmp_file="$(mktemp "${PERM_CONFIG}.tmp.XXXXXX" 2>/dev/null || mktemp)" || return 1
+    if jq --argjson val "$mode" '.yoloMode = $val' "$PERM_CONFIG" > "$tmp_file" 2>/dev/null; then
+      mv "$tmp_file" "$PERM_CONFIG"
     else
       rm -f "$tmp_file"
     fi
   fi
 }
 
+PREV_YOLO="false"
+if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+  PREV_YOLO="$(jq -r '.yoloMode // false' "$PERM_CONFIG" 2>/dev/null || echo false)"
+fi
+
 cleanup() {
   trap - EXIT INT TERM
-  set_yolo_mode false
+  set_yolo_mode "$PREV_YOLO"
 }
+trap cleanup EXIT INT TERM
 
 set_yolo_mode true
-trap cleanup EXIT INT TERM
 
 BWRAP_ARGS=()
 if [[ -d /etc/ssh/ssh_config.d ]]; then
