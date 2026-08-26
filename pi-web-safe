@@ -7,7 +7,7 @@ usage() {
   echo "  sandbox where the project directory, ~/.pi, ~/.gemini and a narrow set of" >&2
   echo "  build tool caches are writable; everything else read-only. Defaults to the" >&2
   echo "  current directory if [project-dir] is omitted." >&2
-  echo "  Enables pi-permission-system yolo mode for the run; restored on exit." >&2
+  echo "  Enables pi-permission-system yolo mode for the run; disabled on exit." >&2
   echo "  Remember to pick the project dir as the session cwd in the pi-web UI." >&2
   exit 1
 }
@@ -47,19 +47,13 @@ set_yolo_mode() {
   fi
 }
 
-PREV_YOLO="false"
-if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
-  PREV_YOLO="$(jq -r '.yoloMode // false' "$PERM_CONFIG" 2>/dev/null || echo false)"
-fi
-
 cleanup() {
   trap - EXIT INT TERM
-  set_yolo_mode "$PREV_YOLO"
+  set_yolo_mode false
 }
 trap cleanup EXIT INT TERM
 
 set_yolo_mode true
-[[ "$PREV_YOLO" == "true" ]] || echo "pi-web-safe: yolo mode enabled (was: $PREV_YOLO), will restore on exit"
 # --- end yolo mode handling ---
 
 # Writable paths for build tooling. Kept in sync with pi-safe; the two scripts
