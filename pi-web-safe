@@ -4,8 +4,9 @@ set -euo pipefail
 usage() {
   echo "usage: pi-web-safe [project-dir] [pi-web args...]" >&2
   echo "  Runs pi-web (pnpx @agegr/pi-web@latest --hostname 0.0.0.0) in a bubblewrap" >&2
-  echo "  sandbox where the project directory, ~/.pi, and ~/.gemini are writable; everything" >&2
-  echo "  else read-only. Defaults to the current directory if [project-dir] is omitted." >&2
+  echo "  sandbox where the project directory, ~/.pi, ~/.gemini and a narrow set of" >&2
+  echo "  build tool caches are writable; everything else read-only. Defaults to the" >&2
+  echo "  current directory if [project-dir] is omitted." >&2
   echo "  Enables pi-permission-system yolo mode for the run; restored on exit." >&2
   echo "  Remember to pick the project dir as the session cwd in the pi-web UI." >&2
   exit 1
@@ -25,26 +26,10 @@ PROJECT_DIR="$(realpath -e -- "$PROJECT_DIR")" || { echo "pi-web-safe: cannot re
 
 command -v pnpx >/dev/null 2>&1 || { echo "pi-web-safe: 'pnpx' not found in PATH" >&2; exit 1; }
 command -v bwrap >/dev/null 2>&1 || { echo "pi-web-safe: 'bwrap' not found in PATH" >&2; exit 1; }
+: "${HOME:?pi-web-safe: HOME is not set}"
 
-PI_DIR="$HOME/.pi"
-mkdir -p "$PI_DIR"
-PI_DIR="$(realpath -e "$PI_DIR")"
-
-GEMINI_DIR="$HOME/.gemini"
-mkdir -p "$GEMINI_DIR"
-GEMINI_DIR="$(realpath -e "$GEMINI_DIR")"
-
-PNPM_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
-mkdir -p "$PNPM_CACHE_DIR"
-PNPM_CACHE_DIR="$(realpath -e "$PNPM_CACHE_DIR")"
-
-PNPM_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
-mkdir -p "$PNPM_DATA_DIR"
-PNPM_DATA_DIR="$(realpath -e "$PNPM_DATA_DIR")"
-
-PNPM_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
-mkdir -p "$PNPM_STATE_DIR"
-PNPM_STATE_DIR="$(realpath -e "$PNPM_STATE_DIR")"
+mkdir -p ~/.pi ~/.gemini 2>/dev/null || true
+PI_DIR="$(realpath ~/.pi)" || { echo "pi-web-safe: cannot resolve ~/.pi" >&2; exit 1; }
 
 # --- yolo mode handling (ported from pi-safe) ---
 PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
@@ -77,37 +62,158 @@ set_yolo_mode true
 [[ "$PREV_YOLO" == "true" ]] || echo "pi-web-safe: yolo mode enabled (was: $PREV_YOLO), will restore on exit"
 # --- end yolo mode handling ---
 
+# Writable paths for build tooling. Kept in sync with pi-safe; the two scripts
+# are installed one file at a time, so the list is duplicated rather than shared.
+#
+# These are deliberately narrow: only directories holding downloaded artifacts
+# and compiled output, never a tool's root directory. Roots such as ~/.cargo,
+# ~/.local/share or ~/.nvm hold executables that are on your PATH, and config
+# that runs on the next build (~/.cargo/config.toml, ~/.gradle/init.d,
+# ~/.m2/settings.xml). Making those writable would let the agent plant code
+# that later runs OUTSIDE the sandbox, which defeats the point of pi-web-safe.
+CACHE_DIRS=(
+  # Agent config: extensions, AGENTS.md
+  "$HOME/.pi"
+  "$HOME/.gemini"
+
+  # JVM
+  "$HOME/.m2/repository"
+  "$HOME/.gradle/caches"
+  "$HOME/.gradle/wrapper"
+  "$HOME/.gradle/native"
+  "$HOME/.ivy2/cache"
+  "$HOME/.cache/coursier"
+
+  # Rust
+  "$HOME/.cargo/registry"
+  "$HOME/.cargo/git"
+
+  # Go
+  "$HOME/go/pkg/mod"
+  "$HOME/.cache/go-build"
+
+  # Node
+  "$HOME/.npm/_cacache"
+  "$HOME/.pnpm-store"
+  "$HOME/.cache/yarn"
+  "$HOME/.yarn/berry/cache"
+  "$HOME/.bun/install/cache"
+  "$HOME/.cache/deno"
+  "$HOME/.cache/node-gyp"
+  "$HOME/.cache/ms-playwright"
+
+  # Python
+  "$HOME/.cache/pip"
+  "$HOME/.cache/uv"
+  "$HOME/.cache/pypoetry"
+
+  # .NET, PHP, Dart, Ruby, Haskell, Elixir
+  "$HOME/.nuget/packages"
+  "$HOME/.cache/composer"
+  "$HOME/.pub-cache/hosted"
+  "$HOME/.pub-cache/git"
+  "$HOME/.gem/cache"
+  "$HOME/.cabal/packages"
+  "$HOME/.stack/pantry"
+  "$HOME/.hex/packages"
+
+  # Version manager download caches (not the installed toolchains)
+  "$HOME/.cache/mise"
+)
+
+# Left read-only on purpose:
+#   ~/.cache/pre-commit  hook environments, executed by git outside the sandbox
+#   ~/.nvm ~/.pyenv ~/.asdf ~/.sdkman ~/.rustup ~/.cargo/bin ~/.bun/bin
+#                        interpreters and shims that are on your PATH
+# Installing a toolchain or a global CLI therefore has to happen outside
+# pi-web-safe.
+
+# Escape hatch, same variable as pi-safe: PI_SAFE_WRITE=/path/one:/path/two
+if [ -n "${PI_SAFE_WRITE:-}" ]; then
+  IFS=':' read -r -a extra_dirs <<<"$PI_SAFE_WRITE"
+  CACHE_DIRS+=("${extra_dirs[@]}")
+fi
+
+# pi-web is fetched and run by pnpx on every start, so unlike pi-safe this
+# sandbox must let pnpm write its store, its installed packages and its state.
+# That includes ~/.local/share/pnpm, which pi-safe keeps read-only: the CLI
+# shims pnpm puts there are on your PATH outside the sandbox.
+PNPM_DIRS=(
+  "${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+  "${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
+)
+if [[ -n "${PNPM_HOME:-}" ]]; then
+  PNPM_DIRS+=("$PNPM_HOME")
+fi
+
+BIND_ARGS=()
+bound=""
+
+add_bind() {
+  local path="$1" mode="${2:---bind}" real
+  real="$(realpath -q "$path")" || return 0
+  [ -e "$real" ] || return 0
+  case ":$bound:" in *":$mode $real:"*) return 0 ;; esac
+  bound="$bound:$mode $real"
+  BIND_ARGS+=("$mode" "$real" "$real")
+}
+
+for dir in "${CACHE_DIRS[@]}"; do
+  # Create a cache dir only when its tool is already installed, i.e. when the
+  # parent exists, so pi-web-safe never litters $HOME for tools you do not use.
+  parent="$(dirname "$dir")"
+  if [ ! -d "$dir" ] && [ "$parent" != "$HOME" ] && [ -d "$parent" ]; then
+    mkdir -p "$dir" 2>/dev/null || true
+  fi
+  add_bind "$dir"
+done
+
+# pnpm cannot run at all without these, so create them unconditionally.
+for dir in "${PNPM_DIRS[@]}"; do
+  mkdir -p "$dir" 2>/dev/null || true
+  add_bind "$dir"
+done
+
+# Git worktrees and repo subdirectories: the real .git lives outside
+# $PROJECT_DIR, and git refuses to commit without write access to it. Keep the
+# parts git executes on the host read-only, so this cannot become a way out of
+# the sandbox.
+if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)"; then
+  git_common="$(cd "$PROJECT_DIR" && realpath -q "$git_common")" || git_common=""
+  if [ -n "$git_common" ] && [ "${git_common#"$PROJECT_DIR"/}" = "$git_common" ]; then
+    mkdir -p "$git_common/hooks" 2>/dev/null || true
+    add_bind "$git_common"
+    add_bind "$git_common/hooks" --ro-bind
+    add_bind "$git_common/config" --ro-bind
+  fi
+fi
+
+# No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
+# through the read-only bind of /, so a forwarded agent is already reachable.
+
 BWRAP_ARGS=(
   --ro-bind / /
-  --bind "$PI_DIR" "$PI_DIR"
-  --bind "$GEMINI_DIR" "$GEMINI_DIR"
-  --bind "$PNPM_CACHE_DIR" "$PNPM_CACHE_DIR"
-  --bind "$PNPM_DATA_DIR" "$PNPM_DATA_DIR"
-  --bind "$PNPM_STATE_DIR" "$PNPM_STATE_DIR"
   --dev-bind /dev/null /dev/null
   --dev-bind /dev/urandom /dev/urandom
   --tmpfs /tmp
-  --bind "$PROJECT_DIR" "$PROJECT_DIR"
-  --chdir "$PROJECT_DIR"
-  --setenv PS1 "sandbox$ "
 )
-
-if [[ -n "${PNPM_HOME:-}" ]]; then
-  mkdir -p "$PNPM_HOME"
-  PNPM_HOME_REAL="$(realpath -e "$PNPM_HOME")"
-  if [[ "$PNPM_HOME_REAL" != "$PNPM_DATA_DIR" ]]; then
-    BWRAP_ARGS+=(--bind "$PNPM_HOME_REAL" "$PNPM_HOME_REAL")
-  fi
-fi
 
 if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
 fi
 
+# Binds go after --tmpfs /tmp, which would otherwise silently shadow any bind
+# resolving under /tmp.
+BWRAP_ARGS+=(
+  "${BIND_ARGS[@]}"
+  --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  --chdir "$PROJECT_DIR"
+  --setenv PS1 "sandbox$ "
+)
+
 echo "pi-web-safe: sandboxed, writable project: $PROJECT_DIR"
-echo "pi-web-safe: ~/.pi ($PI_DIR) and ~/.gemini ($GEMINI_DIR) writable, /tmp tmpfs, everything else read-only"
+echo "pi-web-safe: ~/.pi, ~/.gemini and build tool caches writable, /tmp tmpfs, everything else read-only"
 echo "pi-web-safe: pick $PROJECT_DIR as the session cwd in the pi-web UI"
 
 bwrap "${BWRAP_ARGS[@]}" pnpx "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@"
-rc=$?
-exit "$rc"
