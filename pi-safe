@@ -59,6 +59,8 @@ CACHE_DIRS=(
   "$HOME/.gradle/caches"
   "$HOME/.gradle/wrapper"
   "$HOME/.gradle/native"
+  "$HOME/.gradle/daemon"
+  "$HOME/.gradle/workers"
   "$HOME/.ivy2/cache"
   "$HOME/.cache/coursier"
 
