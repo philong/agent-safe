@@ -23,14 +23,9 @@ set_yolo_mode() {
   fi
 }
 
-PREV_YOLO="false"
-if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
-  PREV_YOLO="$(jq -r '.yoloMode // false' "$PERM_CONFIG" 2>/dev/null || echo false)"
-fi
-
 cleanup() {
   trap - EXIT INT TERM
-  set_yolo_mode "$PREV_YOLO"
+  set_yolo_mode false
 }
 trap cleanup EXIT INT TERM
 
