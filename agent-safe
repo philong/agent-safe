@@ -279,7 +279,9 @@ fi
 BWRAP_ARGS=(
   --ro-bind / /
   --dev-bind /dev/null /dev/null
+  --dev-bind /dev/zero /dev/zero
   --dev-bind /dev/urandom /dev/urandom
+  --tmpfs /dev/shm
   --tmpfs /tmp
 )
 
