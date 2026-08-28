@@ -25,7 +25,11 @@ Multi-call symlink shortcuts:
   claude-safe      -> runs 'claude' mode directly
 
 Options:
-  -h, --help       Show this help message
+  -C, --cwd <dir>    Set project working directory (default: current directory)
+  -w, --write <dir>  Mount an extra directory as writable inside sandbox
+  --dry-run          Print sandbox configuration and bwrap command without executing
+  --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
+  -h, --help         Show this help message
 EOF
   exit 1
 }
@@ -47,11 +51,29 @@ if [[ "${AGENT_SAFE_NO_MASK:-0}" == "1" ]]; then
   MASK_SECRETS=0
 fi
 
+PROJECT_DIR="$PWD"
+EXTRA_WRITE_CLI=()
+DRY_RUN=0
+
 # Parse options
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
+      ;;
+    --dry-run|--info)
+      DRY_RUN=1
+      shift
+      ;;
+    -C|--cwd|--dir)
+      [[ $# -ge 2 ]] || { echo "agent-safe: $1 requires a directory argument" >&2; exit 1; }
+      PROJECT_DIR="$2"
+      shift 2
+      ;;
+    -w|--write|--bind)
+      [[ $# -ge 2 ]] || { echo "agent-safe: $1 requires a directory argument" >&2; exit 1; }
+      EXTRA_WRITE_CLI+=("$2")
+      shift 2
       ;;
     --no-mask)
       MASK_SECRETS=0
@@ -92,7 +114,6 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 # In pi-web mode, first positional non-flag argument can be project directory
-PROJECT_DIR="$PWD"
 if [[ "$TARGET" == "pi-web" && $# -gt 0 && "$1" != -* ]]; then
   PROJECT_DIR="$1"
   shift
@@ -257,6 +278,11 @@ if [[ ${#EXTRA_DIRS[@]} -gt 0 ]]; then
   CACHE_DIRS+=("${EXTRA_DIRS[@]}")
 fi
 
+# Append extra directory binds from CLI flags (-w / --write)
+if [[ ${#EXTRA_WRITE_CLI[@]} -gt 0 ]]; then
+  CACHE_DIRS+=("${EXTRA_WRITE_CLI[@]}")
+fi
+
 # Escape hatch: AGENT_SAFE_WRITE=/path/one:/path/two agent-safe (or PI_SAFE_WRITE)
 EXTRA_WRITE="${AGENT_SAFE_WRITE:-${PI_SAFE_WRITE:-}}"
 if [ -n "$EXTRA_WRITE" ]; then
@@ -339,6 +365,16 @@ BWRAP_ARGS+=(
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
 )
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "agent-safe [dry-run]:"
+  echo "  Target: $TARGET"
+  echo "  Project directory: $PROJECT_DIR"
+  echo "  Command: ${RUN_CMD[*]}"
+  echo "  Bubblewrap arguments:"
+  printf '    %q\n' "${BWRAP_ARGS[@]}" "${RUN_CMD[@]}"
+  exit 0
+fi
 
 if [[ "$TARGET" == "pi-web" ]]; then
   echo "agent-safe [pi-web]: sandboxed, writable project: $PROJECT_DIR"
