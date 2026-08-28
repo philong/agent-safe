@@ -40,11 +40,20 @@ case "$PROG" in
   *)        TARGET="" ;;
 esac
 
-# First argument can override the target mode or request help
-if [[ $# -gt 0 ]]; then
+MASK_SECRETS=1
+if [[ "${AGENT_SAFE_NO_MASK:-0}" == "1" ]]; then
+  MASK_SECRETS=0
+fi
+
+# Parse options
+while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
+      ;;
+    --no-mask)
+      MASK_SECRETS=0
+      shift
       ;;
     --claude|claude)
       TARGET="claude"
@@ -66,8 +75,11 @@ if [[ $# -gt 0 ]]; then
       TARGET="raw"
       shift
       ;;
+    *)
+      break
+      ;;
   esac
-fi
+done
 
 if [[ -z "$TARGET" ]]; then
   usage
@@ -287,6 +299,22 @@ BWRAP_ARGS=(
 
 if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
+fi
+
+# Mask sensitive host credentials from read access
+if [[ "$MASK_SECRETS" -eq 1 ]]; then
+  SECRET_PATHS=(
+    "$HOME/.ssh"
+    "$HOME/.aws"
+    "$HOME/.gnupg"
+    "$HOME/.kube"
+    "$HOME/.docker"
+  )
+  for secret in "${SECRET_PATHS[@]}"; do
+    if [[ -e "$secret" ]]; then
+      BWRAP_ARGS+=(--tmpfs "$secret")
+    fi
+  done
 fi
 
 # Binds go after --tmpfs /tmp, which would otherwise silently shadow any bind
