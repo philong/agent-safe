@@ -15,6 +15,7 @@ Targets / Modes:
   pi-web           Run Pi Web in yolo mode (pnpx @agegr/pi-web@latest --hostname 0.0.0.0)
   agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
   claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
+  shell [args...]  Run an interactive shell inside the sandbox
   run <cmd...>     Run an arbitrary command inside the sandbox
 
 Multi-call symlink shortcuts:
@@ -37,6 +38,7 @@ case "$PROG" in
   *agy*)    TARGET="agy" ;;
   *pi-web*|*web*) TARGET="pi-web" ;;
   *pi*)     TARGET="pi" ;;
+  *shell*|*bash*|*sh*) TARGET="shell" ;;
   *)        TARGET="" ;;
 esac
 
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pi|pi)
       TARGET="pi"
+      shift
+      ;;
+    shell|bash|sh)
+      TARGET="shell"
       shift
       ;;
     run|--)
@@ -128,6 +134,14 @@ case "$TARGET" in
   claude)
     command -v claude >/dev/null 2>&1 || { echo "agent-safe: 'claude' not found in PATH" >&2; exit 1; }
     RUN_CMD=(claude --dangerously-skip-permissions "$@")
+    ;;
+  shell)
+    user_shell="${SHELL:-/bin/bash}"
+    if [[ $# -gt 0 ]]; then
+      RUN_CMD=("$user_shell" "$@")
+    else
+      RUN_CMD=("$user_shell" "-i")
+    fi
     ;;
   raw)
     if [[ $# -eq 0 ]]; then
