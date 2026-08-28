@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF' >&2
+usage: agent-safe <target|command> [args...]
+       agent-safe [project-dir]           (when invoked as pi-web-safe)
+
+Runs AI coding agents in a bubblewrap sandbox where the project directory,
+agent configs, and a narrow set of build tool caches are writable; everything
+else read-only.
+
+Targets / Modes:
+  pi               Run Pi CLI in yolo mode
+  pi-web           Run Pi Web in yolo mode (pnpx @agegr/pi-web@latest --hostname 0.0.0.0)
+  agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
+  claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
+  run <cmd...>     Run an arbitrary command inside the sandbox
+
+Multi-call symlink shortcuts:
+  pi-safe          -> runs 'pi' mode directly
+  pi-web-safe      -> runs 'pi-web' mode directly
+  agy-safe         -> runs 'agy' mode directly
+  claude-safe      -> runs 'claude' mode directly
+
+Options:
+  -h, --help       Show this help message
+EOF
+  exit 1
+}
+
+PROG="$(basename "$0")"
+TARGET=""
+
+case "$PROG" in
+  *claude*) TARGET="claude" ;;
+  *agy*)    TARGET="agy" ;;
+  *pi-web*|*web*) TARGET="pi-web" ;;
+  *pi*)     TARGET="pi" ;;
+  *)        TARGET="" ;;
+esac
+
+# First argument can override the target mode or request help
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    --claude|claude)
+      TARGET="claude"
+      shift
+      ;;
+    --agy|agy)
+      TARGET="agy"
+      shift
+      ;;
+    --pi-web|pi-web|--web|web)
+      TARGET="pi-web"
+      shift
+      ;;
+    --pi|pi)
+      TARGET="pi"
+      shift
+      ;;
+    run|--)
+      TARGET="raw"
+      shift
+      ;;
+  esac
+fi
+
+if [[ -z "$TARGET" ]]; then
+  usage
+fi
+
+# In pi-web mode, first positional non-flag argument can be project directory
+PROJECT_DIR="$PWD"
+if [[ "$TARGET" == "pi-web" && $# -gt 0 && "$1" != -* ]]; then
+  PROJECT_DIR="$1"
+  shift
+fi
+PROJECT_DIR="$(realpath -e -- "$PROJECT_DIR")" || { echo "agent-safe: cannot resolve project dir: $PROJECT_DIR" >&2; exit 1; }
+
+command -v bwrap >/dev/null 2>&1 || { echo "agent-safe: 'bwrap' not found in PATH" >&2; exit 1; }
+: "${HOME:?agent-safe: HOME is not set}"
+
+EXTRA_DIRS=()
+RUN_CMD=()
+ENABLE_PI_YOLO=false
+
+case "$TARGET" in
+  pi)
+    PI_BIN="$(command -v pi)" || { echo "agent-safe: 'pi' not found in PATH" >&2; exit 1; }
+    ENABLE_PI_YOLO=true
+    RUN_CMD=("$PI_BIN" "$@")
+    ;;
+  pi-web)
+    command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
+    ENABLE_PI_YOLO=true
+    # pi-web is fetched and run by pnpx on every start, so unlike other modes
+    # this sandbox must let pnpm write its store, installed packages and state.
+    EXTRA_DIRS+=(
+      "${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
+      "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+      "${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
+    )
+    if [[ -n "${PNPM_HOME:-}" ]]; then
+      EXTRA_DIRS+=("$PNPM_HOME")
+    fi
+    RUN_CMD=(pnpx "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
+    ;;
+  agy)
+    command -v agy >/dev/null 2>&1 || { echo "agent-safe: 'agy' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(agy --dangerously-skip-permissions "$@")
+    ;;
+  claude)
+    command -v claude >/dev/null 2>&1 || { echo "agent-safe: 'claude' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(claude --dangerously-skip-permissions "$@")
+    ;;
+  raw)
+    if [[ $# -eq 0 ]]; then
+      echo "agent-safe run: no command specified" >&2
+      exit 1
+    fi
+    RUN_CMD=("$@")
+    ;;
+esac
+
+mkdir -p ~/.pi ~/.gemini ~/.claude 2>/dev/null || true
+PI_DIR="$(realpath ~/.pi 2>/dev/null || echo "$HOME/.pi")"
+PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
+
+set_yolo_mode() {
+  local mode="$1"
+  if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+    local tmp_file
+    tmp_file="$(mktemp "${PERM_CONFIG}.tmp.XXXXXX" 2>/dev/null || mktemp)" || return 1
+    if jq --argjson val "$mode" '.yoloMode = $val' "$PERM_CONFIG" > "$tmp_file" 2>/dev/null; then
+      mv "$tmp_file" "$PERM_CONFIG"
+    else
+      rm -f "$tmp_file"
+    fi
+  fi
+}
+
+cleanup() {
+  trap - EXIT INT TERM
+  set_yolo_mode false
+}
+
+if [[ "$ENABLE_PI_YOLO" == true ]]; then
+  trap cleanup EXIT INT TERM
+  set_yolo_mode true
+fi
+
+# Writable paths for build tooling and agent configs.
+#
+# These are deliberately narrow: only directories holding downloaded artifacts
+# and compiled output, never a tool's root directory. Roots such as ~/.cargo,
+# ~/.local/share or ~/.nvm hold executables that are on your PATH, and config
+# that runs on the next build (~/.cargo/config.toml, ~/.gradle/init.d,
+# ~/.m2/settings.xml). Making those writable would let the agent plant code
+# that later runs OUTSIDE the sandbox, which defeats the point of agent-safe.
+CACHE_DIRS=(
+  # Agent config: extensions, settings, auth, session history
+  "$HOME/.pi"
+  "$HOME/.gemini"
+  "$HOME/.claude"
+  "$HOME/.claude.json"
+  "$HOME/.config/claude"
+
+  # JVM
+  "$HOME/.m2/repository"
+  "$HOME/.gradle/caches"
+  "$HOME/.gradle/wrapper"
+  "$HOME/.gradle/native"
+  "$HOME/.gradle/daemon"
+  "$HOME/.gradle/workers"
+  "$HOME/.ivy2/cache"
+  "$HOME/.cache/coursier"
+
+  # Rust
+  "$HOME/.cargo/registry"
+  "$HOME/.cargo/git"
+
+  # Go
+  "$HOME/go/pkg/mod"
+  "$HOME/.cache/go-build"
+
+  # Node
+  "$HOME/.npm/_cacache"
+  "$HOME/.pnpm-store"
+  "$HOME/.cache/yarn"
+  "$HOME/.yarn/berry/cache"
+  "$HOME/.bun/install/cache"
+  "$HOME/.cache/deno"
+  "$HOME/.cache/node-gyp"
+  "$HOME/.cache/ms-playwright"
+
+  # Python
+  "$HOME/.cache/pip"
+  "$HOME/.cache/uv"
+  "$HOME/.cache/pypoetry"
+
+  # .NET, PHP, Dart, Ruby, Haskell, Elixir
+  "$HOME/.nuget/packages"
+  "$HOME/.cache/composer"
+  "$HOME/.pub-cache/hosted"
+  "$HOME/.pub-cache/git"
+  "$HOME/.gem/cache"
+  "$HOME/.cabal/packages"
+  "$HOME/.stack/pantry"
+  "$HOME/.hex/packages"
+
+  # Version manager download caches (not the installed toolchains)
+  "$HOME/.cache/mise"
+)
+
+# Left read-only on purpose:
+#   ~/.local/share       .desktop files, systemd user units, mise/pipx installs
+#   ~/.cache/pre-commit  hook environments, executed by git outside the sandbox
+#   ~/.nvm ~/.pyenv ~/.asdf ~/.sdkman ~/.rustup ~/.cargo/bin ~/.bun/bin
+#                        interpreters and shims that are on your PATH
+# Installing a toolchain or a global CLI therefore has to happen outside agent-safe.
+
+# Append extra directory binds from specific modes (e.g. pnpm dirs for pi-web mode)
+if [[ ${#EXTRA_DIRS[@]} -gt 0 ]]; then
+  for p_dir in "${EXTRA_DIRS[@]}"; do
+    mkdir -p "$p_dir" 2>/dev/null || true
+  done
+  CACHE_DIRS+=("${EXTRA_DIRS[@]}")
+fi
+
+# Escape hatch: AGENT_SAFE_WRITE=/path/one:/path/two agent-safe (or PI_SAFE_WRITE)
+EXTRA_WRITE="${AGENT_SAFE_WRITE:-${PI_SAFE_WRITE:-}}"
+if [ -n "$EXTRA_WRITE" ]; then
+  IFS=':' read -r -a extra_write_dirs <<<"$EXTRA_WRITE"
+  CACHE_DIRS+=("${extra_write_dirs[@]}")
+fi
+
+BIND_ARGS=()
+bound=""
+
+add_bind() {
+  local path="$1" mode="${2:---bind}" real
+  real="$(realpath -q "$path")" || return 0
+  [ -e "$real" ] || return 0
+  case ":$bound:" in *":$mode $real:"*) return 0 ;; esac
+  bound="$bound:$mode $real"
+  BIND_ARGS+=("$mode" "$real" "$real")
+}
+
+for dir in "${CACHE_DIRS[@]}"; do
+  # Create a cache dir only when its tool is already installed, i.e. when the
+  # parent exists, so agent-safe never litters $HOME for tools you do not use.
+  parent="$(dirname "$dir")"
+  if [ ! -e "$dir" ] && [ "$parent" != "$HOME" ] && [ -d "$parent" ]; then
+    mkdir -p "$dir" 2>/dev/null || true
+  fi
+  add_bind "$dir"
+done
+
+# Git worktrees and repo subdirectories: the real .git lives outside $PROJECT_DIR,
+# and git refuses to commit without write access to it. Keep the parts git executes
+# on the host read-only, so this cannot become a way out of the sandbox.
+if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)"; then
+  git_common="$(cd "$PROJECT_DIR" && realpath -q "$git_common")" || git_common=""
+  if [ -n "$git_common" ] && [ "${git_common#"$PROJECT_DIR"/}" = "$git_common" ]; then
+    mkdir -p "$git_common/hooks" 2>/dev/null || true
+    add_bind "$git_common"
+    add_bind "$git_common/hooks" --ro-bind
+    add_bind "$git_common/config" --ro-bind
+  fi
+fi
+
+# No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
+# through the read-only bind of /, so a forwarded agent is already reachable.
+
+BWRAP_ARGS=(
+  --ro-bind / /
+  --dev-bind /dev/null /dev/null
+  --dev-bind /dev/urandom /dev/urandom
+  --tmpfs /tmp
+)
+
+if [[ -d /etc/ssh/ssh_config.d ]]; then
+  BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
+fi
+
+# Binds go after --tmpfs /tmp, which would otherwise silently shadow any bind
+# resolving under /tmp.
+BWRAP_ARGS+=(
+  "${BIND_ARGS[@]}"
+  --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  --chdir "$PROJECT_DIR"
+  --setenv PS1 "sandbox$ "
+)
+
+if [[ "$TARGET" == "pi-web" ]]; then
+  echo "agent-safe [pi-web]: sandboxed, writable project: $PROJECT_DIR"
+  echo "agent-safe [pi-web]: ~/.pi, ~/.gemini and build tool caches writable, /tmp tmpfs, everything else read-only"
+  echo "agent-safe [pi-web]: pick $PROJECT_DIR as the session cwd in the pi-web UI"
+else
+  echo "Entering sandbox for $PROJECT_DIR ($TARGET mode)"
+fi
+
+bwrap "${BWRAP_ARGS[@]}" "${RUN_CMD[@]}"
