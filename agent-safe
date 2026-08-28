@@ -15,6 +15,7 @@ Targets / Modes:
   pi-web           Run Pi Web in yolo mode (pnpx @agegr/pi-web@latest --hostname 0.0.0.0)
   agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
   claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
+  aider            Run Aider (aider --yes)
   shell [args...]  Run an interactive shell inside the sandbox
   run <cmd...>     Run an arbitrary command inside the sandbox
 
@@ -23,6 +24,7 @@ Multi-call symlink shortcuts:
   pi-web-safe      -> runs 'pi-web' mode directly
   agy-safe         -> runs 'agy' mode directly
   claude-safe      -> runs 'claude' mode directly
+  aider-safe       -> runs 'aider' mode directly
 
 Options:
   -C, --cwd <dir>    Set project working directory (default: current directory)
@@ -41,6 +43,7 @@ TARGET=""
 case "$PROG" in
   *claude*) TARGET="claude" ;;
   *agy*)    TARGET="agy" ;;
+  *aider*)  TARGET="aider" ;;
   *pi-web*|*web*) TARGET="pi-web" ;;
   *pi*)     TARGET="pi" ;;
   *shell*|*bash*|*sh*) TARGET="shell" ;;
@@ -95,6 +98,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --agy|agy)
       TARGET="agy"
+      shift
+      ;;
+    --aider|aider)
+      TARGET="aider"
       shift
       ;;
     --pi-web|pi-web|--web|web)
@@ -166,6 +173,10 @@ case "$TARGET" in
     command -v claude >/dev/null 2>&1 || { echo "agent-safe: 'claude' not found in PATH" >&2; exit 1; }
     RUN_CMD=(claude --dangerously-skip-permissions "$@")
     ;;
+  aider)
+    command -v aider >/dev/null 2>&1 || { echo "agent-safe: 'aider' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(aider --yes "$@")
+    ;;
   shell)
     user_shell="${SHELL:-/bin/bash}"
     if [[ $# -gt 0 ]]; then
@@ -225,6 +236,9 @@ CACHE_DIRS=(
   "$HOME/.claude"
   "$HOME/.claude.json"
   "$HOME/.config/claude"
+  "$HOME/.aider"
+  "$HOME/.aider.conf.yml"
+  "$HOME/.aider.chat.history.md"
 
   # JVM
   "$HOME/.m2/repository"
