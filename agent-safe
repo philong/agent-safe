@@ -27,6 +27,7 @@ Multi-call symlink shortcuts:
 Options:
   -C, --cwd <dir>    Set project working directory (default: current directory)
   -w, --write <dir>  Mount an extra directory as writable inside sandbox
+  --offline, --no-net Run with network isolation (disable network access)
   --dry-run          Print sandbox configuration and bwrap command without executing
   --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
   -h, --help         Show this help message
@@ -51,6 +52,11 @@ if [[ "${AGENT_SAFE_NO_MASK:-0}" == "1" ]]; then
   MASK_SECRETS=0
 fi
 
+OFFLINE=0
+if [[ "${AGENT_SAFE_OFFLINE:-0}" == "1" ]]; then
+  OFFLINE=1
+fi
+
 PROJECT_DIR="$PWD"
 EXTRA_WRITE_CLI=()
 DRY_RUN=0
@@ -60,6 +66,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
+      ;;
+    --offline|--no-net)
+      OFFLINE=1
+      shift
       ;;
     --dry-run|--info)
       DRY_RUN=1
@@ -355,6 +365,11 @@ if [[ "$MASK_SECRETS" -eq 1 ]]; then
       BWRAP_ARGS+=(--tmpfs "$secret")
     fi
   done
+fi
+
+# Network isolation
+if [[ "$OFFLINE" -eq 1 ]]; then
+  BWRAP_ARGS+=(--unshare-net)
 fi
 
 # Binds go after --tmpfs /tmp, which would otherwise silently shadow any bind
