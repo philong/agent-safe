@@ -388,6 +388,11 @@ if [[ "$MASK_SECRETS" -eq 1 ]]; then
       BWRAP_ARGS+=(--tmpfs "$secret")
     fi
   done
+
+  # Preserve known host public keys so git SSH connections do not prompt repeatedly
+  if [[ -f "$HOME/.ssh/known_hosts" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$HOME/.ssh/known_hosts" "$HOME/.ssh/known_hosts")
+  fi
 fi
 
 # Network isolation
