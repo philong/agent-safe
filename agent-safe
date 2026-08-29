@@ -211,12 +211,58 @@ set_yolo_mode() {
   fi
 }
 
+# yoloMode is global state in a shared config file, so concurrent pi sessions have
+# to be reference counted: without this the first session to exit turns yoloMode
+# off underneath every session still running. One marker file per live session,
+# named by pid so a session killed with -9 can be reaped by the next one.
+YOLO_RUN_DIR="$PI_DIR/.agent-safe-yolo"
+YOLO_MARKER=""
+
+yolo_live_sessions() {
+  local marker pid count=0
+  for marker in "$YOLO_RUN_DIR"/*; do
+    [ -f "$marker" ] || continue
+    pid="${marker##*/}"
+    # Anything not named after a pid is bookkeeping (the "prior" file), not a session.
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$marker"
+      continue
+    fi
+    count=$((count + 1))
+  done
+  echo "$count"
+}
+
 cleanup() {
   trap - EXIT INT TERM
-  set_yolo_mode false
+  [ -n "$YOLO_MARKER" ] || return 0
+  rm -f "$YOLO_MARKER"
+  YOLO_MARKER=""
+  # Restore only once the last session is gone, and only to what we found.
+  if [ "$(yolo_live_sessions)" -eq 0 ] && [ -f "$YOLO_RUN_DIR/prior" ]; then
+    set_yolo_mode "$(cat "$YOLO_RUN_DIR/prior")"
+    rm -f "$YOLO_RUN_DIR/prior"
+  fi
 }
 
 if [[ "$ENABLE_PI_YOLO" == true ]]; then
+  if mkdir -p "$YOLO_RUN_DIR" 2>/dev/null; then
+    # Snapshot only when no record survives. A leftover "prior" with no live
+    # session means an earlier run was killed before it could restore; that file
+    # still holds the untouched value, while the config now holds ours.
+    if [ ! -f "$YOLO_RUN_DIR/prior" ]; then
+      # Remember whether the user already had yoloMode on, so we hand it back
+      # instead of hardcoding false.
+      prior=false
+      if [[ -f "$PERM_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+        prior="$(jq -r 'if .yoloMode == true then "true" else "false" end' "$PERM_CONFIG" 2>/dev/null || echo false)"
+      fi
+      printf '%s' "$prior" > "$YOLO_RUN_DIR/prior" 2>/dev/null || true
+    fi
+    YOLO_MARKER="$YOLO_RUN_DIR/$$"
+    : > "$YOLO_MARKER" 2>/dev/null || YOLO_MARKER=""
+  fi
   trap cleanup EXIT INT TERM
   set_yolo_mode true
 fi
