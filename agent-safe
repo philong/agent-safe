@@ -368,6 +368,15 @@ BWRAP_ARGS=(
   --dev /dev
   --tmpfs /dev/shm
   --tmpfs /tmp
+  # A PID namespace keeps the agent's process management inside the sandbox: a
+  # stray `pkill -f node` or `killall java` can no longer reach your editor,
+  # your daemons, or another agent session. --proc is required to go with it,
+  # or /proc would still show the host's processes.
+  --proc /proc
+  --unshare-pid
+  # Tear the sandbox down with the launching shell, so build daemons started
+  # inside it (gradle, pnpm, node watchers) do not outlive the session.
+  --die-with-parent
 )
 
 if [[ -d /etc/ssh/ssh_config.d ]]; then
