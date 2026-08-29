@@ -15,7 +15,7 @@ AI coding agents can write or delete files anywhere on your system, including ou
 - Package manager and compiler caches (Rust, Go, Node, Python, JVM, .NET, etc.) are **writable** so builds and dependency downloads persist without polluting outside directories.
 - Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK` available for git operations).
 - `/tmp` and `/dev/shm` are mounted as **tmpfs** (enabling shared memory for Playwright, Chromium, and test runners).
-- Git worktrees are safely mounted with `hooks/` and `config` enforced as **read-only** so sandboxed commands cannot plant malicious Git hooks.
+- Git `hooks/` is enforced as **read-only** in every repo layout (plain repos, worktrees, subdirectories), so a sandboxed agent cannot leave behind a hook that later runs on the host. `.git/config` stays writable, so `git config` and `git remote add` work normally.
 
 ## Prerequisites
 
