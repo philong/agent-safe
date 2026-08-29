@@ -336,16 +336,27 @@ for dir in "${CACHE_DIRS[@]}"; do
   add_bind "$dir"
 done
 
-# Git worktrees and repo subdirectories: the real .git lives outside $PROJECT_DIR,
-# and git refuses to commit without write access to it. Keep the parts git executes
-# on the host read-only, so this cannot become a way out of the sandbox.
+# Git hooks are executed by git ON THE HOST the next time you run a git command in
+# this repo, so keep hooks/ read-only in every repo layout. Nothing legitimately
+# writes it, and an agent that drops a script there escapes the sandbox by accident.
+# .git/config stays writable: `git config` and `git remote add` are normal things to
+# run, and a bad value there is local and easy to undo.
+# For worktrees and repo subdirectories the real .git is outside $PROJECT_DIR and
+# also has to be bound writable, or git refuses to commit.
+GIT_RO_ARGS=()
 if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)"; then
   git_common="$(cd "$PROJECT_DIR" && realpath -q "$git_common")" || git_common=""
-  if [ -n "$git_common" ] && [ "${git_common#"$PROJECT_DIR"/}" = "$git_common" ]; then
+  if [ -n "$git_common" ]; then
     mkdir -p "$git_common/hooks" 2>/dev/null || true
-    add_bind "$git_common"
-    add_bind "$git_common/hooks" --ro-bind
-    add_bind "$git_common/config" --ro-bind
+    if [ "${git_common#"$PROJECT_DIR"/}" = "$git_common" ]; then
+      add_bind "$git_common"
+    fi
+    # Applied after the $PROJECT_DIR bind below, which would otherwise re-expose
+    # hooks/ as writable.
+    git_hooks="$(realpath -q "$git_common/hooks")" || git_hooks=""
+    if [ -n "$git_hooks" ] && [ -e "$git_hooks" ]; then
+      GIT_RO_ARGS+=(--ro-bind "$git_hooks" "$git_hooks")
+    fi
   fi
 fi
 
@@ -389,6 +400,7 @@ fi
 BWRAP_ARGS+=(
   "${BIND_ARGS[@]}"
   --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  "${GIT_RO_ARGS[@]}"
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
 )
