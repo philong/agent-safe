@@ -146,7 +146,13 @@ if [[ "$TARGET" == "pi-web" && $# -gt 0 && "$1" != -* ]]; then
   PROJECT_DIR="$1"
   shift
 fi
-PROJECT_DIR="$(realpath -e -- "$PROJECT_DIR")" || { echo "agent-safe: cannot resolve project dir: $PROJECT_DIR" >&2; exit 1; }
+# Resolve into a temporary, or the failed assignment would blank $PROJECT_DIR
+# before the error message gets to name it.
+if ! project_dir_real="$(realpath -e -- "$PROJECT_DIR" 2>/dev/null)"; then
+  echo "agent-safe: cannot resolve project dir: $PROJECT_DIR" >&2
+  exit 1
+fi
+PROJECT_DIR="$project_dir_real"
 
 command -v bwrap >/dev/null 2>&1 || { echo "agent-safe: 'bwrap' not found in PATH" >&2; exit 1; }
 : "${HOME:?agent-safe: HOME is not set}"
