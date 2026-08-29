@@ -101,6 +101,10 @@ agent-safe run cargo test
 
 ## Flags & Options
 
+Options must come **before** the target. Everything after the target is passed
+through to it untouched, so `agent-safe claude --help` shows Claude's help and
+`agent-safe run rg --dry-run` passes `--dry-run` to `rg`.
+
 | Flag | Description |
 |---|---|
 | `-C, --cwd <dir>` | Set project working directory without `cd`-ing first |

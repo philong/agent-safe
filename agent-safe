@@ -3,8 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: agent-safe <target|command> [args...]
+usage: agent-safe [options] <target|command> [args...]
        agent-safe [project-dir]           (when invoked as pi-web-safe)
+
+Options must come BEFORE the target; everything after it is passed
+through to the target untouched (so `agent-safe claude --help` shows
+Claude's help, not this one).
 
 Runs AI coding agents in a bubblewrap sandbox where the project directory,
 agent configs, and a narrow set of build tool caches are writable; everything
@@ -95,30 +99,37 @@ while [[ $# -gt 0 ]]; do
     --claude|claude)
       TARGET="claude"
       shift
+      break
       ;;
     --agy|agy)
       TARGET="agy"
       shift
+      break
       ;;
     --aider|aider)
       TARGET="aider"
       shift
+      break
       ;;
     --pi-web|pi-web|--web|web)
       TARGET="pi-web"
       shift
+      break
       ;;
     --pi|pi)
       TARGET="pi"
       shift
+      break
       ;;
     shell|bash|sh)
       TARGET="shell"
       shift
+      break
       ;;
     run|--)
       TARGET="raw"
       shift
+      break
       ;;
     *)
       break
