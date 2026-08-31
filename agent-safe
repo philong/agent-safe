@@ -461,10 +461,21 @@ if [[ "$MASK_SECRETS" -eq 1 ]]; then
     fi
   done
 
-  # Preserve known host public keys so git SSH connections do not prompt repeatedly
+  # Preserve known hosts, config, and public keys so git SSH and ssh-agent identity selection work
   if [[ -f "$HOME/.ssh/known_hosts" ]]; then
     BWRAP_ARGS+=(--ro-bind "$HOME/.ssh/known_hosts" "$HOME/.ssh/known_hosts")
   fi
+  if [[ -f "$HOME/.ssh/config" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$HOME/.ssh/config" "$HOME/.ssh/config")
+  fi
+  if [[ -d "$HOME/.ssh/config.d" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$HOME/.ssh/config.d" "$HOME/.ssh/config.d")
+  fi
+  for pubkey in "$HOME/.ssh"/*.pub; do
+    if [[ -f "$pubkey" ]]; then
+      BWRAP_ARGS+=(--ro-bind "$pubkey" "$pubkey")
+    fi
+  done
 fi
 
 # Network isolation

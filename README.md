@@ -13,7 +13,7 @@ AI coding agents can write or delete files anywhere on your system, including ou
 - The active project directory is **writable**.
 - Agent configuration and session state directories (`~/.pi`, `~/.gemini`, `~/.claude`, `~/.aider`) are **writable**.
 - Package manager and compiler caches (Rust, Go, Node, Python, JVM, .NET, etc.) are **writable** so builds and dependency downloads persist without polluting outside directories.
-- Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK` and `~/.ssh/known_hosts` available for git operations).
+- Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK`, `~/.ssh/known_hosts`, `~/.ssh/config`, and `~/.ssh/*.pub` public keys available for git operations and ssh-agent identity matching).
 - `/tmp` and `/dev/shm` are mounted as **tmpfs** (enabling shared memory for Playwright, Chromium, and test runners).
 - The sandbox gets its own **PID namespace** (`--unshare-pid`), so an agent running `pkill`/`killall` cannot reach host processes, and it is torn down with the launching shell (`--die-with-parent`) so build daemons do not outlive the session.
 - Git `hooks/` is enforced as **read-only** in every repo layout (plain repos, worktrees, subdirectories), so a sandboxed agent cannot leave behind a hook that later runs on the host. `.git/config` stays writable, so `git config` and `git remote add` work normally.
