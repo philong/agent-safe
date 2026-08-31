@@ -31,7 +31,7 @@ sudo pacman -S bubblewrap ripgrep jq
 Download `agent-safe` into `~/.local/bin/` (or any directory in your `PATH`):
 
 ```bash
-curl -o ~/.local/bin/agent-safe https://raw.githubusercontent.com/dimaginar/pi-safe/main/agent-safe
+curl -o ~/.local/bin/agent-safe https://raw.githubusercontent.com/philong/agent-safe/main/agent-safe
 chmod +x ~/.local/bin/agent-safe
 ```
 
