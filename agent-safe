@@ -470,8 +470,15 @@ done
 # Git hooks are executed by git ON THE HOST the next time you run a git command in
 # this repo, so keep hooks/ read-only in every repo layout. Nothing legitimately
 # writes it, and an agent that drops a script there escapes the sandbox by accident.
-# .git/config stays writable: `git config` and `git remote add` are normal things to
-# run, and a bad value there is local and easy to undo.
+#
+# .git/config is read-only for the same reason. Marking only hooks/ read-only does
+# not close the hole: core.hooksPath redirects hook lookup somewhere else entirely,
+# and core.sshCommand, core.pager, core.editor, alias.*, filter.*.clean/smudge and
+# diff.*.textconv all name commands that git runs ON THE HOST. The cost is that
+# `git config` and `git remote add` fail inside the sandbox; run them outside.
+# Submodule gitdirs under .git/modules/ carry their own config and hooks, so they
+# get the same treatment.
+#
 # For worktrees and repo subdirectories the real .git is outside $PROJECT_DIR and
 # also has to be bound writable, or git refuses to commit.
 GIT_RO_ARGS=()
@@ -483,11 +490,47 @@ if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)";
       add_bind "$git_common"
     fi
     # Applied after the $PROJECT_DIR bind below, which would otherwise re-expose
-    # hooks/ as writable.
-    git_hooks="$(realpath -q "$git_common/hooks")" || git_hooks=""
-    if [ -n "$git_hooks" ] && [ -e "$git_hooks" ]; then
-      GIT_RO_ARGS+=(--ro-bind "$git_hooks" "$git_hooks")
+    # these as writable.
+    git_ro_paths=(
+      "$git_common/config"
+      "$git_common/config.worktree"
+      "$git_common/hooks"
+    )
+    if [ -d "$git_common/modules" ]; then
+      # -name objects -prune keeps this off the loose object store, which is the
+      # only part of a gitdir big enough for the walk to be noticeable.
+      while IFS= read -r -d '' module_path; do
+        git_ro_paths+=("$module_path")
+      done < <(find "$git_common/modules" -name objects -prune -o \
+        \( -name config -o -name config.worktree -o -name hooks \) -print0 2>/dev/null)
     fi
+    # A linked worktree's own gitdir holds a second config file, and core.hooksPath
+    # set there is honored just as it is in the common config. It only counts when
+    # extensions.worktreeConfig is on, and that flag lives in the config we just
+    # made read-only, so it cannot be switched on from inside the sandbox; when it
+    # is already on, every worktree needs the same treatment. Create the file where
+    # it is missing, or there is nothing to bind over and the agent can write a
+    # fresh one. `git sparse-checkout set` turns the extension on by itself, so
+    # this is not an exotic setup.
+    if [ "$(git -C "$PROJECT_DIR" config --get extensions.worktreeConfig 2>/dev/null)" = true ]; then
+      wt_configs=("$git_common/config.worktree")
+      for wt_dir in "$git_common"/worktrees/*/; do
+        [ -d "$wt_dir" ] || continue
+        wt_configs+=("${wt_dir}config.worktree")
+      done
+      for wt_config in "${wt_configs[@]}"; do
+        [ -e "$wt_config" ] || : > "$wt_config" 2>/dev/null || true
+        git_ro_paths+=("$wt_config")
+      done
+    fi
+    git_ro_bound=""
+    for git_ro in "${git_ro_paths[@]}"; do
+      git_ro="$(realpath -q "$git_ro")" || continue
+      [ -e "$git_ro" ] || continue
+      case ":$git_ro_bound:" in *":$git_ro:"*) continue ;; esac
+      git_ro_bound="$git_ro_bound:$git_ro"
+      GIT_RO_ARGS+=(--ro-bind "$git_ro" "$git_ro")
+    done
   fi
 fi
 
