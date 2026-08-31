@@ -184,7 +184,6 @@ can_sandbox() {
 }
 : "${HOME:?agent-safe: HOME is not set}"
 
-EXTRA_DIRS=()
 RUN_CMD=()
 ENABLE_PI_YOLO=false
 
@@ -197,16 +196,6 @@ case "$TARGET" in
   pi-web)
     command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
     ENABLE_PI_YOLO=true
-    # pi-web is fetched and run by pnpx on every start, so unlike other modes
-    # this sandbox must let pnpm write its store, installed packages and state.
-    EXTRA_DIRS+=(
-      "${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
-      "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
-      "${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
-    )
-    if [[ -n "${PNPM_HOME:-}" ]]; then
-      EXTRA_DIRS+=("$PNPM_HOME")
-    fi
     RUN_CMD=(pnpx "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
     ;;
   agy)
@@ -382,6 +371,12 @@ CACHE_DIRS=(
   # Node & Web
   "$HOME/.npm/_cacache"
   "$HOME/.pnpm-store"
+  # pnpm's store and metadata cache. Only store/ and not the whole data dir:
+  # ${XDG_DATA_HOME}/pnpm is PNPM_HOME, whose globally installed shims are on
+  # your PATH and run outside the sandbox.
+  "${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm/store"
+  "${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
   "$HOME/.cache/yarn"
   "$HOME/.yarn/berry/cache"
   "$HOME/.bun/install/cache"
@@ -424,14 +419,6 @@ CACHE_DIRS=(
 #   ~/.nvm ~/.pyenv ~/.asdf ~/.sdkman ~/.rustup ~/.cargo/bin ~/.bun/bin
 #                        interpreters and shims that are on your PATH
 # Installing a toolchain or a global CLI therefore has to happen outside agent-safe.
-
-# Append extra directory binds from specific modes (e.g. pnpm dirs for pi-web mode)
-if [[ ${#EXTRA_DIRS[@]} -gt 0 ]]; then
-  for p_dir in "${EXTRA_DIRS[@]}"; do
-    mkdir -p "$p_dir" 2>/dev/null || true
-  done
-  CACHE_DIRS+=("${EXTRA_DIRS[@]}")
-fi
 
 # Append extra directory binds from CLI flags (-w / --write)
 if [[ ${#EXTRA_WRITE_CLI[@]} -gt 0 ]]; then
