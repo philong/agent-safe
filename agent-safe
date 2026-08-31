@@ -346,6 +346,11 @@ CACHE_DIRS=(
   "$HOME/.stack/pantry"
   "$HOME/.hex/packages"
 
+  # Compiler caches (C/C++/Rust object caches, keyed by content hash)
+  "${CCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ccache}"
+  "$HOME/.ccache"
+  "$HOME/.cache/sccache"
+
   # Version manager download caches (not the installed toolchains)
   "$HOME/.cache/mise"
 )
