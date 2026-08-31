@@ -348,17 +348,29 @@ CACHE_DIRS=(
   "$HOME/.local/share/opencode"
   "$HOME/.local/state/opencode"
   "$HOME/.cache/opencode"
+  # Claude Code's own shell snapshots and MCP logs.
+  "$HOME/.cache/claude-cli-nodejs"
 
   # JVM
   "$HOME/.m2/repository"
-  "$HOME/.gradle/.tmp"
+  "$HOME/.m2/wrapper"
   "$HOME/.gradle/caches"
   "$HOME/.gradle/wrapper"
   "$HOME/.gradle/native"
   "$HOME/.gradle/daemon"
   "$HOME/.gradle/workers"
+  "$HOME/.gradle/.tmp"
+  "$HOME/.gradle/kotlin-profile"
+  "$HOME/.gradle/android"
   "$HOME/.ivy2/cache"
   "$HOME/.cache/coursier"
+  # java.util.prefs and the AWT font cache; the JVM throws on a read-only one.
+  "$HOME/.java/.userPrefs"
+  "$HOME/.java/fonts"
+  "$HOME/.groovy/grapes"
+  "$HOME/.cache/JNA"
+  # Android Gradle builds: debug.keystore, the AVDs and the build cache.
+  "$HOME/.android"
 
   # Rust
   "$HOME/.cargo/registry"
@@ -370,6 +382,7 @@ CACHE_DIRS=(
 
   # Node & Web
   "$HOME/.npm/_cacache"
+  "$HOME/.npm/_logs"
   "$HOME/.pnpm-store"
   # pnpm's store and metadata cache. Only store/ and not the whole data dir:
   # ${XDG_DATA_HOME}/pnpm is PNPM_HOME, whose globally installed shims are on
@@ -383,16 +396,28 @@ CACHE_DIRS=(
   "$HOME/.cache/deno"
   "$HOME/.cache/node-gyp"
   "$HOME/.cache/ms-playwright"
+  "$HOME/.cache/ms-playwright-go"
   "$HOME/.cache/cypress"
   "$HOME/.cache/turbo"
+  "$HOME/.cache/typescript"
 
   # Python & Linters
   "$HOME/.cache/pip"
   "$HOME/.cache/uv"
   "$HOME/.cache/pypoetry"
   "$HOME/.cache/pdm"
+  "$HOME/.cache/matplotlib"
+
+  # Model weights
+  "$HOME/.cache/huggingface"
+
+  # Linters and formatters that keep an incremental cache
   "$HOME/.cache/ruff"
   "$HOME/.cache/mypy"
+  "$HOME/.cache/golangci-lint"
+  "$HOME/.cache/biome"
+  "$HOME/.cache/dprint"
+  "$HOME/.cache/zig"
 
   # .NET, PHP, Dart, Ruby, Haskell, Elixir
   "$HOME/.nuget/packages"
@@ -411,6 +436,22 @@ CACHE_DIRS=(
 
   # Version manager download caches (not the installed toolchains)
   "$HOME/.cache/mise"
+
+  # Regenerated on demand by headless browsers, the JVM and matplotlib; a
+  # read-only one means a slow rebuild on every single run.
+  "$HOME/.cache/fontconfig"
+  "$HOME/.cache/mesa_shader_cache"
+)
+
+# Lock and index files that a tool creates in an otherwise read-only root, so
+# they cannot be pre-created by the mkdir pass below without turning into
+# directories. cargo takes an exclusive flock on $CARGO_HOME/.package-cache for
+# every command that touches the registry, so a read-only CARGO_HOME fails the
+# build even with registry/ and git/ writable.
+CACHE_FILES=(
+  "$HOME/.cargo/.package-cache"
+  "$HOME/.cargo/.package-cache-mutate"
+  "$HOME/.cargo/.global-cache"
 )
 
 # Left read-only on purpose:
@@ -452,6 +493,14 @@ for dir in "${CACHE_DIRS[@]}"; do
     mkdir -p "$dir" 2>/dev/null || true
   fi
   add_bind "$dir"
+done
+
+for file in "${CACHE_FILES[@]}"; do
+  parent="$(dirname "$file")"
+  if [ ! -e "$file" ] && [ -d "$parent" ]; then
+    : > "$file" 2>/dev/null || true
+  fi
+  add_bind "$file"
 done
 
 # Git hooks are executed by git ON THE HOST the next time you run a git command in
