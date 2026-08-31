@@ -119,7 +119,6 @@ You can also use an environment variable for extra write mounts:
 
 ```bash
 AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>
-# (PI_SAFE_WRITE is also supported for backward compatibility)
 ```
 
 ## Notes
