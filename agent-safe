@@ -370,8 +370,8 @@ if [[ ${#EXTRA_WRITE_CLI[@]} -gt 0 ]]; then
   CACHE_DIRS+=("${EXTRA_WRITE_CLI[@]}")
 fi
 
-# Escape hatch: AGENT_SAFE_WRITE=/path/one:/path/two agent-safe (or PI_SAFE_WRITE)
-EXTRA_WRITE="${AGENT_SAFE_WRITE:-${PI_SAFE_WRITE:-}}"
+# Escape hatch: AGENT_SAFE_WRITE=/path/one:/path/two agent-safe
+EXTRA_WRITE="${AGENT_SAFE_WRITE:-}"
 if [ -n "$EXTRA_WRITE" ]; then
   IFS=':' read -r -a extra_write_dirs <<<"$EXTRA_WRITE"
   CACHE_DIRS+=("${extra_write_dirs[@]}")
