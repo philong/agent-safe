@@ -154,7 +154,9 @@ if ! project_dir_real="$(realpath -e -- "$PROJECT_DIR" 2>/dev/null)"; then
 fi
 PROJECT_DIR="$project_dir_real"
 
-command -v bwrap >/dev/null 2>&1 || { echo "agent-safe: 'bwrap' not found in PATH" >&2; exit 1; }
+can_sandbox() {
+  command -v bwrap >/dev/null 2>&1 && bwrap --ro-bind / / true >/dev/null 2>&1
+}
 : "${HOME:?agent-safe: HOME is not set}"
 
 EXTRA_DIRS=()
@@ -163,9 +165,9 @@ ENABLE_PI_YOLO=false
 
 case "$TARGET" in
   pi)
-    PI_BIN="$(command -v pi)" || { echo "agent-safe: 'pi' not found in PATH" >&2; exit 1; }
+    command -v pi >/dev/null 2>&1 || { echo "agent-safe: 'pi' not found in PATH" >&2; exit 1; }
     ENABLE_PI_YOLO=true
-    RUN_CMD=("$PI_BIN" "$@")
+    RUN_CMD=(pi --approve "$@")
     ;;
   pi-web)
     command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
@@ -506,6 +508,16 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "  Bubblewrap arguments:"
   printf '    %q\n' "${BWRAP_ARGS[@]}" "${RUN_CMD[@]}"
   exit 0
+fi
+
+if ! can_sandbox; then
+  local_target="$TARGET"
+  [[ "$local_target" == "raw" ]] && local_target="command"
+  echo "agent-safe: sandbox unavailable (already in container/sandbox or unprivileged userns disabled)" >&2
+  echo "agent-safe: running $local_target directly in $PROJECT_DIR" >&2
+  cd "$PROJECT_DIR"
+  "${RUN_CMD[@]}"
+  exit $?
 fi
 
 if [[ "$TARGET" == "pi-web" ]]; then

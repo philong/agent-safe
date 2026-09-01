@@ -124,6 +124,7 @@ AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>
 ## Notes
 
 - Network access is enabled by default (use `--offline` to disable).
+- If running inside an existing container or sandbox where nested Bubblewrap is unavailable, `agent-safe` automatically detects it and falls back to running the agent directly.
 - Do not install the `pi-sandbox` extension when using `agent-safe`, as it conflicts.
 
 ## Disclaimer
