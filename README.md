@@ -1,6 +1,6 @@
 # agent-safe
 
-A lightweight bubblewrap sandbox for AI coding agents ([Pi](https://github.com/carderne/pi), [Pi Web](https://github.com/agegr/pi-web), [Antigravity](https://antigravity.google), [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [GitHub Copilot](https://github.com/github/copilot-cli), and [Aider](https://aider.chat)).
+A lightweight bubblewrap sandbox for AI coding agents ([Pi](https://github.com/carderne/pi), [Pi Web](https://github.com/agegr/pi-web), [Antigravity](https://antigravity.google), [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [GitHub Copilot](https://github.com/github/copilot-cli), [Aider](https://aider.chat), and [OpenCode](https://opencode.ai)).
 
 ## Why
 
@@ -11,7 +11,7 @@ AI coding agents can write or delete files anywhere on your system, including ou
 `agent-safe` runs the agent in a Bubblewrap sandbox where:
 - The host filesystem is mounted **read-only**.
 - The active project directory is **writable**.
-- Agent configuration and session state directories (`~/.pi`, `~/.gemini`, `~/.claude`, `~/.codex`, `~/.copilot`, `~/.aider`) are **writable**.
+- Agent configuration and session state directories (`~/.pi`, `~/.gemini`, `~/.claude`, `~/.codex`, `~/.copilot`, `~/.aider`, `~/.config/opencode`) are **writable**.
 - Package manager and compiler caches (Rust, Go, Node, Python, JVM, .NET, etc.) are **writable** so builds and dependency downloads persist without polluting outside directories.
 - Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK`, `~/.ssh/known_hosts`, `~/.ssh/config`, and `~/.ssh/*.pub` public keys available for git operations and ssh-agent identity matching).
 - `/tmp` and `/dev/shm` are mounted as **tmpfs** (enabling shared memory for Playwright, Chromium, and test runners).
@@ -47,6 +47,7 @@ ln -sf ~/.local/bin/agent-safe ~/.local/bin/claude-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/codex-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/copilot-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/aider-safe
+ln -sf ~/.local/bin/agent-safe ~/.local/bin/opencode-safe
 ```
 
 ## Usage
@@ -101,14 +102,21 @@ aider-safe
 # or: agent-safe aider
 ```
 
-### 8. Interactive Sandboxed Shell
+### 8. OpenCode CLI (`opencode`)
+Runs `opencode --auto` inside the sandbox:
+```bash
+opencode-safe
+# or: agent-safe opencode
+```
+
+### 9. Interactive Sandboxed Shell
 Spawn an interactive shell inside the exact sandbox environment:
 ```bash
 agent-safe shell
 # or: agent-safe bash
 ```
 
-### 9. Arbitrary Commands
+### 10. Arbitrary Commands
 Run any tool or command inside the sandbox:
 ```bash
 agent-safe run cargo test

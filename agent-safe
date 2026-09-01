@@ -22,6 +22,7 @@ Targets / Modes:
   codex            Run Codex CLI (codex --dangerously-bypass-approvals-and-sandbox)
   copilot          Run GitHub Copilot CLI (copilot --yolo)
   aider            Run Aider (aider --yes)
+  opencode         Run OpenCode CLI (opencode --auto)
   shell [args...]  Run an interactive shell inside the sandbox
   run <cmd...>     Run an arbitrary command inside the sandbox
 
@@ -33,6 +34,7 @@ Multi-call symlink shortcuts:
   codex-safe       -> runs 'codex' mode directly
   copilot-safe     -> runs 'copilot' mode directly
   aider-safe       -> runs 'aider' mode directly
+  opencode-safe    -> runs 'opencode' mode directly
 
 Options:
   -C, --cwd <dir>    Set project working directory (default: current directory)
@@ -51,6 +53,7 @@ TARGET=""
 case "$PROG" in
   *pi-web*|*web*) TARGET="pi-web" ;;
   *copilot*) TARGET="copilot" ;;
+  *opencode*) TARGET="opencode" ;;
   *pi*)      TARGET="pi" ;;
   *agy*)     TARGET="agy" ;;
   *claude*)  TARGET="claude" ;;
@@ -134,6 +137,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --aider|aider)
       TARGET="aider"
+      shift
+      break
+      ;;
+    --opencode|opencode)
+      TARGET="opencode"
       shift
       break
       ;;
@@ -221,6 +229,10 @@ case "$TARGET" in
     command -v aider >/dev/null 2>&1 || { echo "agent-safe: 'aider' not found in PATH" >&2; exit 1; }
     RUN_CMD=(aider --yes "$@")
     ;;
+  opencode)
+    command -v opencode >/dev/null 2>&1 || { echo "agent-safe: 'opencode' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(opencode --auto "$@")
+    ;;
   shell)
     user_shell="${SHELL:-/bin/bash}"
     if [[ $# -gt 0 ]]; then
@@ -245,6 +257,7 @@ case "$TARGET" in
   codex)     mkdir -p "$HOME/.codex" 2>/dev/null || true ;;
   copilot)   mkdir -p "$HOME/.copilot" 2>/dev/null || true ;;
   aider)     mkdir -p "$HOME/.aider" 2>/dev/null || true ;;
+  opencode)  mkdir -p "$HOME/.config/opencode" "$HOME/.local/share/opencode" "$HOME/.local/state/opencode" "$HOME/.cache/opencode" 2>/dev/null || true ;;
 esac
 PI_DIR="$(realpath ~/.pi 2>/dev/null || echo "$HOME/.pi")"
 PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
@@ -341,6 +354,11 @@ CACHE_DIRS=(
   "$HOME/.aider"
   "$HOME/.aider.conf.yml"
   "$HOME/.aider.chat.history.md"
+  "$HOME/.opencode"
+  "$HOME/.config/opencode"
+  "$HOME/.local/share/opencode"
+  "$HOME/.local/state/opencode"
+  "$HOME/.cache/opencode"
 
   # JVM
   "$HOME/.m2/repository"
