@@ -237,7 +237,14 @@ case "$TARGET" in
     ;;
 esac
 
-mkdir -p ~/.pi ~/.gemini ~/.claude ~/.codex ~/.copilot 2>/dev/null || true
+case "$TARGET" in
+  pi|pi-web) mkdir -p "$HOME/.pi" 2>/dev/null || true ;;
+  agy)       mkdir -p "$HOME/.gemini" 2>/dev/null || true ;;
+  claude)    mkdir -p "$HOME/.claude" 2>/dev/null || true ;;
+  codex)     mkdir -p "$HOME/.codex" 2>/dev/null || true ;;
+  copilot)   mkdir -p "$HOME/.copilot" 2>/dev/null || true ;;
+  aider)     mkdir -p "$HOME/.aider" 2>/dev/null || true ;;
+esac
 PI_DIR="$(realpath ~/.pi 2>/dev/null || echo "$HOME/.pi")"
 PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
 
@@ -429,7 +436,7 @@ for dir in "${CACHE_DIRS[@]}"; do
   # Create a cache dir only when its tool is already installed, i.e. when the
   # parent exists, so agent-safe never litters $HOME for tools you do not use.
   parent="$(dirname "$dir")"
-  if [ ! -e "$dir" ] && [ "$parent" != "$HOME" ] && [ -d "$parent" ]; then
+  if [ ! -e "$dir" ] && [ "$parent" != "$HOME" ] && [ "$parent" != "$HOME/.config" ] && [ -d "$parent" ]; then
     mkdir -p "$dir" 2>/dev/null || true
   fi
   add_bind "$dir"
@@ -551,7 +558,7 @@ fi
 
 if [[ "$TARGET" == "pi-web" ]]; then
   echo "agent-safe [pi-web]: sandboxed, writable project: $PROJECT_DIR"
-  echo "agent-safe [pi-web]: ~/.pi, ~/.gemini and build tool caches writable, /tmp tmpfs, everything else read-only"
+  echo "agent-safe [pi-web]: ~/.pi and build tool caches writable, /tmp tmpfs, everything else read-only"
   echo "agent-safe [pi-web]: pick $PROJECT_DIR as the session cwd in the pi-web UI"
 else
   echo "Entering sandbox for $PROJECT_DIR ($TARGET mode)"
