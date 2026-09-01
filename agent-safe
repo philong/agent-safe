@@ -19,6 +19,8 @@ Targets / Modes:
   pi-web           Run Pi Web in yolo mode (pnpx @agegr/pi-web@latest --hostname 0.0.0.0)
   agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
   claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
+  codex            Run Codex CLI (codex --dangerously-bypass-approvals-and-sandbox)
+  copilot          Run GitHub Copilot CLI (copilot --yolo)
   aider            Run Aider (aider --yes)
   shell [args...]  Run an interactive shell inside the sandbox
   run <cmd...>     Run an arbitrary command inside the sandbox
@@ -28,6 +30,8 @@ Multi-call symlink shortcuts:
   pi-web-safe      -> runs 'pi-web' mode directly
   agy-safe         -> runs 'agy' mode directly
   claude-safe      -> runs 'claude' mode directly
+  codex-safe       -> runs 'codex' mode directly
+  copilot-safe     -> runs 'copilot' mode directly
   aider-safe       -> runs 'aider' mode directly
 
 Options:
@@ -45,13 +49,15 @@ PROG="$(basename "$0")"
 TARGET=""
 
 case "$PROG" in
-  *claude*) TARGET="claude" ;;
-  *agy*)    TARGET="agy" ;;
-  *aider*)  TARGET="aider" ;;
   *pi-web*|*web*) TARGET="pi-web" ;;
-  *pi*)     TARGET="pi" ;;
+  *copilot*) TARGET="copilot" ;;
+  *pi*)      TARGET="pi" ;;
+  *agy*)     TARGET="agy" ;;
+  *claude*)  TARGET="claude" ;;
+  *codex*)   TARGET="codex" ;;
+  *aider*)   TARGET="aider" ;;
   *shell*|*bash*|*sh*) TARGET="shell" ;;
-  *)        TARGET="" ;;
+  *)         TARGET="" ;;
 esac
 
 MASK_SECRETS=1
@@ -96,18 +102,8 @@ while [[ $# -gt 0 ]]; do
       MASK_SECRETS=0
       shift
       ;;
-    --claude|claude)
-      TARGET="claude"
-      shift
-      break
-      ;;
-    --agy|agy)
-      TARGET="agy"
-      shift
-      break
-      ;;
-    --aider|aider)
-      TARGET="aider"
+    --pi|pi)
+      TARGET="pi"
       shift
       break
       ;;
@@ -116,8 +112,28 @@ while [[ $# -gt 0 ]]; do
       shift
       break
       ;;
-    --pi|pi)
-      TARGET="pi"
+    --agy|agy)
+      TARGET="agy"
+      shift
+      break
+      ;;
+    --claude|claude)
+      TARGET="claude"
+      shift
+      break
+      ;;
+    --codex|codex)
+      TARGET="codex"
+      shift
+      break
+      ;;
+    --copilot|copilot)
+      TARGET="copilot"
+      shift
+      break
+      ;;
+    --aider|aider)
+      TARGET="aider"
       shift
       break
       ;;
@@ -192,6 +208,14 @@ case "$TARGET" in
     command -v claude >/dev/null 2>&1 || { echo "agent-safe: 'claude' not found in PATH" >&2; exit 1; }
     RUN_CMD=(claude --dangerously-skip-permissions "$@")
     ;;
+  codex)
+    command -v codex >/dev/null 2>&1 || { echo "agent-safe: 'codex' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(codex --dangerously-bypass-approvals-and-sandbox "$@")
+    ;;
+  copilot)
+    command -v copilot >/dev/null 2>&1 || { echo "agent-safe: 'copilot' not found in PATH" >&2; exit 1; }
+    RUN_CMD=(copilot --yolo "$@")
+    ;;
   aider)
     command -v aider >/dev/null 2>&1 || { echo "agent-safe: 'aider' not found in PATH" >&2; exit 1; }
     RUN_CMD=(aider --yes "$@")
@@ -213,7 +237,7 @@ case "$TARGET" in
     ;;
 esac
 
-mkdir -p ~/.pi ~/.gemini ~/.claude 2>/dev/null || true
+mkdir -p ~/.pi ~/.gemini ~/.claude ~/.codex ~/.copilot 2>/dev/null || true
 PI_DIR="$(realpath ~/.pi 2>/dev/null || echo "$HOME/.pi")"
 PERM_CONFIG="$PI_DIR/agent/extensions/pi-permission-system/config.json"
 
@@ -301,6 +325,11 @@ CACHE_DIRS=(
   "$HOME/.claude"
   "$HOME/.claude.json"
   "$HOME/.config/claude"
+  "$HOME/.codex"
+  "$HOME/.config/codex"
+  "$HOME/.copilot"
+  "$HOME/.config/copilot"
+  "$HOME/.config/github-copilot"
   "$HOME/.aider"
   "$HOME/.aider.conf.yml"
   "$HOME/.aider.chat.history.md"
