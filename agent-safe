@@ -362,6 +362,7 @@ CACHE_DIRS=(
 
   # JVM
   "$HOME/.m2/repository"
+  "$HOME/.gradle/.tmp"
   "$HOME/.gradle/caches"
   "$HOME/.gradle/wrapper"
   "$HOME/.gradle/native"
