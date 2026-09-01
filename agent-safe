@@ -359,7 +359,7 @@ CACHE_DIRS=(
   "$HOME/go/pkg/mod"
   "$HOME/.cache/go-build"
 
-  # Node
+  # Node & Web
   "$HOME/.npm/_cacache"
   "$HOME/.pnpm-store"
   "$HOME/.cache/yarn"
@@ -368,11 +368,16 @@ CACHE_DIRS=(
   "$HOME/.cache/deno"
   "$HOME/.cache/node-gyp"
   "$HOME/.cache/ms-playwright"
+  "$HOME/.cache/cypress"
+  "$HOME/.cache/turbo"
 
-  # Python
+  # Python & Linters
   "$HOME/.cache/pip"
   "$HOME/.cache/uv"
   "$HOME/.cache/pypoetry"
+  "$HOME/.cache/pdm"
+  "$HOME/.cache/ruff"
+  "$HOME/.cache/mypy"
 
   # .NET, PHP, Dart, Ruby, Haskell, Elixir
   "$HOME/.nuget/packages"
