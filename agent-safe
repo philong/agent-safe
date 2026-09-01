@@ -171,6 +171,7 @@ fi
 PROJECT_DIR="$project_dir_real"
 
 can_sandbox() {
+  [[ "${AGENT_SAFE:-0}" == "1" ]] && return 1
   command -v bwrap >/dev/null 2>&1 && bwrap --ro-bind / / true >/dev/null 2>&1
 }
 : "${HOME:?agent-safe: HOME is not set}"
@@ -539,6 +540,7 @@ BWRAP_ARGS+=(
   "${GIT_RO_ARGS[@]}"
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
+  --setenv AGENT_SAFE 1
 )
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -554,8 +556,12 @@ fi
 if ! can_sandbox; then
   local_target="$TARGET"
   [[ "$local_target" == "raw" ]] && local_target="command"
-  echo "agent-safe: sandbox unavailable (already in container/sandbox or unprivileged userns disabled)" >&2
-  echo "agent-safe: running $local_target directly in $PROJECT_DIR" >&2
+  if [[ "${AGENT_SAFE:-0}" == "1" ]]; then
+    echo "agent-safe: already inside sandbox; running $local_target directly in $PROJECT_DIR" >&2
+  else
+    echo "agent-safe: sandbox unavailable (already in container/sandbox or unprivileged userns disabled)" >&2
+    echo "agent-safe: running $local_target directly in $PROJECT_DIR" >&2
+  fi
   cd "$PROJECT_DIR"
   "${RUN_CMD[@]}"
   exit $?
