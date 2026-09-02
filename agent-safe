@@ -190,8 +190,38 @@ ENABLE_PI_YOLO=false
 case "$TARGET" in
   pi)
     command -v pi >/dev/null 2>&1 || { echo "agent-safe: 'pi' not found in PATH" >&2; exit 1; }
-    ENABLE_PI_YOLO=true
-    RUN_CMD=(pi --approve "$@")
+    case "${1:-}" in
+      install|remove|uninstall|update|list|config)
+        has_approve=0
+        for arg in "${@:2}"; do
+          case "$arg" in
+            -a|--approve|-na|--no-approve) has_approve=1; break ;;
+          esac
+        done
+        if [[ "$has_approve" -eq 1 ]]; then
+          RUN_CMD=(pi "$@")
+        else
+          RUN_CMD=(pi "$1" --approve "${@:2}")
+        fi
+        ;;
+      auth|-h|--help|-v|--version)
+        RUN_CMD=(pi "$@")
+        ;;
+      *)
+        ENABLE_PI_YOLO=true
+        has_approve=0
+        for arg in "$@"; do
+          case "$arg" in
+            -a|--approve|-na|--no-approve) has_approve=1; break ;;
+          esac
+        done
+        if [[ "$has_approve" -eq 1 ]]; then
+          RUN_CMD=(pi "$@")
+        else
+          RUN_CMD=(pi --approve "$@")
+        fi
+        ;;
+    esac
     ;;
   pi-web)
     command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
@@ -220,7 +250,37 @@ case "$TARGET" in
     ;;
   opencode)
     command -v opencode >/dev/null 2>&1 || { echo "agent-safe: 'opencode' not found in PATH" >&2; exit 1; }
-    RUN_CMD=(opencode --auto "$@")
+    case "${1:-}" in
+      run)
+        has_auto=0
+        for arg in "${@:2}"; do
+          case "$arg" in
+            --auto) has_auto=1; break ;;
+          esac
+        done
+        if [[ "$has_auto" -eq 1 ]]; then
+          RUN_CMD=(opencode "$@")
+        else
+          RUN_CMD=(opencode run --auto "${@:2}")
+        fi
+        ;;
+      completion|acp|mcp|attach|debug|providers|auth|agent|upgrade|uninstall|serve|web|models|stats|export|import|github|pr|session|plugin|plug|db|-h|--help|-v|--version)
+        RUN_CMD=(opencode "$@")
+        ;;
+      *)
+        has_auto=0
+        for arg in "$@"; do
+          case "$arg" in
+            --auto) has_auto=1; break ;;
+          esac
+        done
+        if [[ "$has_auto" -eq 1 ]]; then
+          RUN_CMD=(opencode "$@")
+        else
+          RUN_CMD=(opencode --auto "$@")
+        fi
+        ;;
+    esac
     ;;
   shell)
     user_shell="${SHELL:-/bin/bash}"
