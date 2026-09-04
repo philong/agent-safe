@@ -347,15 +347,117 @@ yolo_live_sessions() {
   echo "$count"
 }
 
+AGY_SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
+AGY_CONFIG="$HOME/.gemini/config/config.json"
+AGY_RUN_DIR="$HOME/.gemini/.agent-safe-agy"
+AGY_MARKER=""
+
+disable_agy_terminal_sandbox() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local tmp_file
+  if [[ -f "$AGY_SETTINGS" ]]; then
+    tmp_file="$(mktemp "${AGY_SETTINGS}.tmp.XXXXXX" 2>/dev/null || mktemp)" || true
+    if [[ -n "$tmp_file" ]]; then
+      if jq '.enableTerminalSandbox = false' "$AGY_SETTINGS" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$AGY_SETTINGS"
+      else
+        rm -f "$tmp_file"
+      fi
+    fi
+  fi
+  if [[ -f "$AGY_CONFIG" ]]; then
+    tmp_file="$(mktemp "${AGY_CONFIG}.tmp.XXXXXX" 2>/dev/null || mktemp)" || true
+    if [[ -n "$tmp_file" ]]; then
+      if jq 'if has("userSettings") then .userSettings.enableTerminalSandbox = false else . end' "$AGY_CONFIG" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$AGY_CONFIG"
+      else
+        rm -f "$tmp_file"
+      fi
+    fi
+  fi
+}
+
+restore_agy_terminal_sandbox() {
+  [ -f "$AGY_RUN_DIR/prior" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local prior_settings prior_config tmp_file
+  {
+    IFS= read -r prior_settings || true
+    IFS= read -r prior_config || true
+  } < "$AGY_RUN_DIR/prior"
+
+  if [[ -f "$AGY_SETTINGS" ]]; then
+    tmp_file="$(mktemp "${AGY_SETTINGS}.tmp.XXXXXX" 2>/dev/null || mktemp)" || true
+    if [[ -n "$tmp_file" ]]; then
+      local jq_filter
+      if [[ "$prior_settings" == "unset" ]]; then
+        jq_filter='del(.enableTerminalSandbox)'
+      elif [[ "$prior_settings" == "true" || "$prior_settings" == "false" ]]; then
+        jq_filter=".enableTerminalSandbox = $prior_settings"
+      else
+        jq_filter=""
+      fi
+      if [[ -n "$jq_filter" ]] && jq "$jq_filter" "$AGY_SETTINGS" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$AGY_SETTINGS"
+      else
+        rm -f "$tmp_file"
+      fi
+    fi
+  fi
+
+  if [[ -f "$AGY_CONFIG" ]]; then
+    tmp_file="$(mktemp "${AGY_CONFIG}.tmp.XXXXXX" 2>/dev/null || mktemp)" || true
+    if [[ -n "$tmp_file" ]]; then
+      local jq_filter
+      if [[ "$prior_config" == "unset" ]]; then
+        jq_filter='if has("userSettings") then del(.userSettings.enableTerminalSandbox) else . end'
+      elif [[ "$prior_config" == "true" || "$prior_config" == "false" ]]; then
+        jq_filter="if has(\"userSettings\") then .userSettings.enableTerminalSandbox = $prior_config else . end"
+      else
+        jq_filter=""
+      fi
+      if [[ -n "$jq_filter" ]] && jq "$jq_filter" "$AGY_CONFIG" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$AGY_CONFIG"
+      else
+        rm -f "$tmp_file"
+      fi
+    fi
+  fi
+  rm -f "$AGY_RUN_DIR/prior"
+}
+
+agy_live_sessions() {
+  local marker pid count=0
+  for marker in "$AGY_RUN_DIR"/*; do
+    [ -f "$marker" ] || continue
+    pid="${marker##*/}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$marker"
+      continue
+    fi
+    count=$((count + 1))
+  done
+  echo "$count"
+}
+
 cleanup() {
   trap - EXIT INT TERM
-  [ -n "$YOLO_MARKER" ] || return 0
-  rm -f "$YOLO_MARKER"
-  YOLO_MARKER=""
-  # Restore only once the last session is gone, and only to what we found.
-  if [ "$(yolo_live_sessions)" -eq 0 ] && [ -f "$YOLO_RUN_DIR/prior" ]; then
-    set_yolo_mode "$(cat "$YOLO_RUN_DIR/prior")"
-    rm -f "$YOLO_RUN_DIR/prior"
+  if [ -n "$YOLO_MARKER" ]; then
+    rm -f "$YOLO_MARKER"
+    YOLO_MARKER=""
+    # Restore only once the last session is gone, and only to what we found.
+    if [ "$(yolo_live_sessions)" -eq 0 ] && [ -f "$YOLO_RUN_DIR/prior" ]; then
+      set_yolo_mode "$(cat "$YOLO_RUN_DIR/prior")"
+      rm -f "$YOLO_RUN_DIR/prior"
+    fi
+  fi
+  if [ -n "$AGY_MARKER" ]; then
+    rm -f "$AGY_MARKER"
+    AGY_MARKER=""
+    if [ "$(agy_live_sessions)" -eq 0 ]; then
+      restore_agy_terminal_sandbox
+    fi
   fi
 }
 
@@ -378,6 +480,26 @@ if [[ "$ENABLE_PI_YOLO" == true ]]; then
   fi
   trap cleanup EXIT INT TERM
   set_yolo_mode true
+fi
+
+if [[ "$TARGET" == "agy" ]]; then
+  if mkdir -p "$AGY_RUN_DIR" 2>/dev/null; then
+    if [ ! -f "$AGY_RUN_DIR/prior" ]; then
+      prior_settings="unset"
+      if [[ -f "$AGY_SETTINGS" ]] && command -v jq >/dev/null 2>&1; then
+        prior_settings="$(jq -r 'if has("enableTerminalSandbox") then (.enableTerminalSandbox | tostring) else "unset" end' "$AGY_SETTINGS" 2>/dev/null || echo unset)"
+      fi
+      prior_config="unset"
+      if [[ -f "$AGY_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+        prior_config="$(jq -r 'if .userSettings? | has("enableTerminalSandbox") then (.userSettings.enableTerminalSandbox | tostring) else "unset" end' "$AGY_CONFIG" 2>/dev/null || echo unset)"
+      fi
+      printf '%s\n%s\n' "$prior_settings" "$prior_config" > "$AGY_RUN_DIR/prior" 2>/dev/null || true
+    fi
+    AGY_MARKER="$AGY_RUN_DIR/$$"
+    : > "$AGY_MARKER" 2>/dev/null || AGY_MARKER=""
+  fi
+  trap cleanup EXIT INT TERM
+  disable_agy_terminal_sandbox
 fi
 
 # Writable paths for build tooling and agent configs.
