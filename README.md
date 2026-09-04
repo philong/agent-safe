@@ -68,7 +68,7 @@ pi-web-safe [optional-project-dir]
 ```
 
 ### 3. Antigravity CLI (`agy`)
-Runs `agy --dangerously-skip-permissions` inside the sandbox:
+Runs `agy --dangerously-skip-permissions` inside the sandbox (automatically disables `enableTerminalSandbox` during the session to avoid nested namespace conflicts, and restores your setting on exit):
 ```bash
 agy-safe
 # or: agent-safe agy
