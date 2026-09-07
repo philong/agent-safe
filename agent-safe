@@ -766,8 +766,65 @@ IDE_RO_ARGS=()
 if [ -d "$HOME/.claude" ]; then
   mkdir -p "$HOME/.claude/ide" 2>/dev/null || true
 fi
+claude_ide_dir=""
 if claude_ide_dir="$(realpath -q "$HOME/.claude/ide")" && [ -d "$claude_ide_dir" ]; then
   IDE_RO_ARGS+=(--ro-bind "$claude_ide_dir" "$claude_ide_dir")
+else
+  claude_ide_dir=""
+fi
+
+# Keeping the lockfile is necessary but not sufficient. When it thinks it is in an
+# editor terminal, the CLI only accepts a lockfile whose port equals
+# CLAUDE_CODE_SSE_PORT; for any other lockfile it demands that the recorded pid be
+# alive AND an ancestor of itself, which no host pid can be inside the sandbox's PID
+# namespace. The extension does export CLAUDE_CODE_SSE_PORT into its terminals, but
+# it picks a fresh port every activation, so after a window reload the variable in an
+# already-open terminal names a port nothing listens on any more -- and then the
+# sandboxed CLI falls through to the pid test and finds no IDE at all.
+#
+# agent-safe still runs on the host here, where pids are visible, so it can do the
+# matching the sandboxed CLI cannot and hand over the answer: resolve the lockfile
+# for this project itself and pin CLAUDE_CODE_SSE_PORT to that port. Newest lockfile
+# first, which is the order the CLI itself prefers them in.
+resolve_claude_ide_port() {
+  [ -n "$claude_ide_dir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local lock port pid folder
+  # A value the extension exported into this very terminal beats our guess, as long
+  # as it still names a live editor: with the same project open in two windows it is
+  # the only thing that knows which window the terminal belongs to.
+  if [[ "${CLAUDE_CODE_SSE_PORT:-}" =~ ^[0-9]+$ ]]; then
+    lock="$claude_ide_dir/$CLAUDE_CODE_SSE_PORT.lock"
+    if [ -f "$lock" ]; then
+      pid="$(jq -r '.pid // empty' "$lock" 2>/dev/null)" || pid=""
+      if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+      fi
+    fi
+  fi
+
+  while IFS= read -r lock; do
+    [ -f "$lock" ] || continue
+    port="${lock##*/}"
+    port="${port%.lock}"
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    pid="$(jq -r '.pid // empty' "$lock" 2>/dev/null)" || continue
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    while IFS= read -r folder; do
+      [ -n "$folder" ] || continue
+      if [ "$PROJECT_DIR" = "$folder" ] || [ "${PROJECT_DIR#"$folder"/}" != "$PROJECT_DIR" ]; then
+        printf '%s' "$port"
+        return 0
+      fi
+    done < <(jq -r '.workspaceFolders[]? // empty' "$lock" 2>/dev/null)
+  done < <(ls -1t "$claude_ide_dir"/*.lock 2>/dev/null)
+}
+
+IDE_ENV_ARGS=()
+if ide_port="$(resolve_claude_ide_port)" && [ -n "$ide_port" ]; then
+  IDE_ENV_ARGS+=(--setenv CLAUDE_CODE_SSE_PORT "$ide_port")
 fi
 
 # No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
@@ -840,6 +897,7 @@ BWRAP_ARGS+=(
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
   --setenv AGENT_SAFE 1
+  "${IDE_ENV_ARGS[@]}"
 )
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
