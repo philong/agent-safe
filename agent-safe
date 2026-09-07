@@ -752,6 +752,24 @@ if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)";
   fi
 fi
 
+# Claude Code's IDE integration: the editor extension publishes its WebSocket port,
+# auth token and its OWN pid to ~/.claude/ide/<port>.lock, and the CLI reaps every
+# lockfile whose recorded pid is not alive. That pid belongs to a host process, which
+# does not exist in the sandbox's PID namespace, so a sandboxed agent decides every
+# running editor is dead and DELETES the lockfiles -- taking the integration down for
+# host sessions too, until the editor window is reloaded. Read-only makes the reaper's
+# unlink fail harmlessly (it logs and carries on) while discovery still matches on
+# CLAUDE_CODE_SSE_PORT or the workspace folder, so the connection itself still works.
+# It also stops the agent planting a lockfile of its own, which would aim a host
+# session's IDE connection at a WebSocket server the agent controls.
+IDE_RO_ARGS=()
+if [ -d "$HOME/.claude" ]; then
+  mkdir -p "$HOME/.claude/ide" 2>/dev/null || true
+fi
+if claude_ide_dir="$(realpath -q "$HOME/.claude/ide")" && [ -d "$claude_ide_dir" ]; then
+  IDE_RO_ARGS+=(--ro-bind "$claude_ide_dir" "$claude_ide_dir")
+fi
+
 # No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
 # through the read-only bind of /, so a forwarded agent is already reachable.
 
@@ -818,6 +836,7 @@ BWRAP_ARGS+=(
   "${BIND_ARGS[@]}"
   --bind "$PROJECT_DIR" "$PROJECT_DIR"
   "${GIT_RO_ARGS[@]}"
+  "${IDE_RO_ARGS[@]}"
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
   --setenv AGENT_SAFE 1
