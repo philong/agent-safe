@@ -443,6 +443,10 @@ agy_live_sessions() {
 
 cleanup() {
   trap - EXIT INT TERM
+  if [ -n "${PI_IDE_LOCK_SNAPSHOT:-}" ]; then
+    rm -rf "$PI_IDE_LOCK_SNAPSHOT"
+    PI_IDE_LOCK_SNAPSHOT=""
+  fi
   if [ -n "$YOLO_MARKER" ]; then
     rm -f "$YOLO_MARKER"
     YOLO_MARKER=""
@@ -825,6 +829,59 @@ resolve_claude_ide_port() {
 IDE_ENV_ARGS=()
 if ide_port="$(resolve_claude_ide_port)" && [ -n "$ide_port" ]; then
   IDE_ENV_ARGS+=(--setenv CLAUDE_CODE_SSE_PORT "$ide_port")
+fi
+
+# pi's IDE extension (npm:pi-x-ide) has the same shape of problem, without the escape
+# hatch: the editor writes ~/.pi/pi-x-ide/lock/<ide>-<pid>-<port>.lock, and the pi side
+# skips AND rm's every lockfile whose recorded pid is not alive, with no port variable
+# to bypass the test. ~/.pi is writable, so a sandboxed pi wipes the host's lockfiles
+# too, exactly as claude did.
+#
+# pid is optional in pi-x-ide's own lockfile schema, and that liveness test is the only
+# thing that ever reads it; with no pid a lockfile is accepted on mtime freshness
+# instead. So hand the sandbox a sanitized snapshot: the lockfiles whose pid IS alive
+# out here on the host, copied with the pid dropped, bound read-only over the real lock
+# directory. Rewriting the copies gives them a current mtime for free, and the bind
+# keeps the originals out of the sandbox's reach at the same time. Dead lockfiles are
+# left out rather than sanitized, so a stale one still looks stale from inside.
+PI_IDE_LOCK_SNAPSHOT=""
+prepare_pi_ide_locks() {
+  local lock_dir
+  lock_dir="$(realpath -q "$HOME/.pi/pi-x-ide/lock")" || return 0
+  [ -d "$lock_dir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local snapshot lock pid name copied=0
+  # $XDG_RUNTIME_DIR before /tmp: the sandbox replaces /tmp with a tmpfs, and a
+  # snapshot the agent can neither see nor reach is one less thing to reason about.
+  snapshot="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/agent-safe-pi-ide.XXXXXX" 2>/dev/null)" || return 0
+  chmod 700 "$snapshot" 2>/dev/null || true
+
+  for lock in "$lock_dir"/*.lock; do
+    [ -f "$lock" ] || continue
+    pid="$(jq -r '.pid // empty' "$lock" 2>/dev/null)" || continue
+    if [[ "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    name="${lock##*/}"
+    if jq 'del(.pid)' "$lock" > "$snapshot/$name" 2>/dev/null; then
+      chmod 600 "$snapshot/$name" 2>/dev/null || true
+      copied=$((copied + 1))
+    else
+      rm -f "$snapshot/$name"
+    fi
+  done
+
+  if [ "$copied" -eq 0 ]; then
+    rm -rf "$snapshot"
+    return 0
+  fi
+  PI_IDE_LOCK_SNAPSHOT="$snapshot"
+  IDE_RO_ARGS+=(--ro-bind "$snapshot" "$lock_dir")
+}
+prepare_pi_ide_locks
+if [ -n "$PI_IDE_LOCK_SNAPSHOT" ]; then
+  trap cleanup EXIT INT TERM
 fi
 
 # No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
