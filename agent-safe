@@ -936,6 +936,44 @@ if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
 fi
 
+# Container engine sockets allow an agent to control a host daemon (usually running
+# as root or with host user access), mount host filesystems read-write, and bypass
+# the sandbox completely. Mask them with /dev/null and strip environment pointers.
+if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
+  CONTAINER_SOCKS=(
+    "/run/docker.sock"
+    "/var/run/docker.sock"
+    "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/docker.sock"
+    "/run/podman/podman.sock"
+    "/var/run/podman/podman.sock"
+    "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/podman/podman.sock"
+    "/run/containerd/containerd.sock"
+    "/run/k3s/containerd/containerd.sock"
+  )
+  if [[ -n "${DOCKER_HOST:-}" && "$DOCKER_HOST" =~ ^unix:// ]]; then
+    CONTAINER_SOCKS+=("${DOCKER_HOST#unix://}")
+  fi
+  if [[ -n "${CONTAINER_HOST:-}" && "$CONTAINER_HOST" =~ ^unix:// ]]; then
+    CONTAINER_SOCKS+=("${CONTAINER_HOST#unix://}")
+  fi
+
+  masked_socks=""
+  for sock in "${CONTAINER_SOCKS[@]}"; do
+    real_sock="$(realpath -q "$sock" 2>/dev/null)" || continue
+    [[ -S "$real_sock" || -e "$real_sock" ]] || continue
+    case ":$masked_socks:" in
+      *":$real_sock:"*) continue ;;
+    esac
+    masked_socks="$masked_socks:$real_sock"
+    BWRAP_ARGS+=(--ro-bind /dev/null "$real_sock")
+  done
+
+  BWRAP_ARGS+=(
+    --unsetenv DOCKER_HOST
+    --unsetenv CONTAINER_HOST
+  )
+fi
+
 # Mask sensitive host credentials from read access
 if [[ "$MASK_SECRETS" -eq 1 ]]; then
   SECRET_PATHS=(
