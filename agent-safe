@@ -539,13 +539,10 @@ CACHE_DIRS=(
   # Claude Code's own shell snapshots and MCP logs.
   "$HOME/.cache/claude-cli-nodejs"
 
-  # JVM
+  # JVM (repository and caches; wrapper dists left read-only to prevent executable poisoning)
   "$HOME/.m2/repository"
-  "$HOME/.m2/wrapper"
   "$HOME/.gradle/caches"
-  "$HOME/.gradle/wrapper"
   "$HOME/.gradle/native"
-  "$HOME/.gradle/daemon"
   "$HOME/.gradle/workers"
   "$HOME/.gradle/.tmp"
   "$HOME/.gradle/kotlin-profile"
@@ -647,6 +644,8 @@ CACHE_FILES=(
 #   ~/.cache/pre-commit  hook environments, executed by git outside the sandbox
 #   ~/.nvm ~/.pyenv ~/.asdf ~/.sdkman ~/.rustup ~/.cargo/bin ~/.bun/bin
 #                        interpreters and shims that are on your PATH
+#   ~/.gradle/wrapper ~/.m2/wrapper
+#                        downloaded wrappers containing shell scripts/executables
 # Installing a toolchain or a global CLI therefore has to happen outside agent-safe.
 
 # Append extra directory binds from CLI flags (-w / --write)
@@ -936,6 +935,15 @@ if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
 fi
 
+# Isolate Gradle daemon state on tmpfs so sandboxed builds do not connect to or
+# hijack daemons running on the host.
+if [[ -d "$HOME/.gradle" ]]; then
+  mkdir -p "$HOME/.gradle/daemon" 2>/dev/null || true
+  BWRAP_ARGS+=(--tmpfs "$HOME/.gradle/daemon")
+fi
+
+masked_socks=""
+
 # Container engine sockets allow an agent to control a host daemon (usually running
 # as root or with host user access), mount host filesystems read-write, and bypass
 # the sandbox completely. Mask them with /dev/null and strip environment pointers.
@@ -957,7 +965,6 @@ if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
     CONTAINER_SOCKS+=("${CONTAINER_HOST#unix://}")
   fi
 
-  masked_socks=""
   for sock in "${CONTAINER_SOCKS[@]}"; do
     real_sock="$(realpath -q "$sock" 2>/dev/null)" || continue
     [[ -S "$real_sock" || -e "$real_sock" ]] || continue
@@ -974,6 +981,32 @@ if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
   )
 fi
 
+# D-Bus, systemd private IPC, and audio daemon sockets allow an agent to escape
+# the sandbox by spawning host units via `systemd-run --user` (or org.freedesktop.systemd1),
+# access desktop secret services, or record host microphone audio.
+HOST_IPC_SOCKS=(
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/bus"
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/systemd/private"
+  "/run/systemd/private"
+  "/run/dbus/system_bus_socket"
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pipewire-0"
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pulse/native"
+)
+for sock in "${HOST_IPC_SOCKS[@]}"; do
+  real_sock="$(realpath -q "$sock" 2>/dev/null)" || continue
+  [[ -S "$real_sock" || -e "$real_sock" ]] || continue
+  case ":$masked_socks:" in
+    *":$real_sock:"*) continue ;;
+  esac
+  masked_socks="$masked_socks:$real_sock"
+  BWRAP_ARGS+=(--ro-bind /dev/null "$real_sock")
+done
+
+BWRAP_ARGS+=(
+  --unsetenv DBUS_SESSION_BUS_ADDRESS
+  --unsetenv DBUS_SYSTEM_BUS_ADDRESS
+)
+
 # Mask sensitive host credentials from read access
 if [[ "$MASK_SECRETS" -eq 1 ]]; then
   SECRET_PATHS=(
@@ -982,6 +1015,8 @@ if [[ "$MASK_SECRETS" -eq 1 ]]; then
     "$HOME/.gnupg"
     "$HOME/.kube"
     "$HOME/.docker"
+    "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/gnupg"
+    "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/keyring"
   )
   for secret in "${SECRET_PATHS[@]}"; do
     if [[ -e "$secret" ]]; then
