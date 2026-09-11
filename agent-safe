@@ -441,13 +441,13 @@ agy_live_sessions() {
   echo "$count"
 }
 
-PI_IDE_LOCK_SNAPSHOTS=()
+IDE_LOCK_SNAPSHOTS=()
 
 cleanup() {
   trap - EXIT INT TERM
-  if [ "${#PI_IDE_LOCK_SNAPSHOTS[@]}" -gt 0 ]; then
-    rm -rf "${PI_IDE_LOCK_SNAPSHOTS[@]}"
-    PI_IDE_LOCK_SNAPSHOTS=()
+  if [ "${#IDE_LOCK_SNAPSHOTS[@]}" -gt 0 ]; then
+    rm -rf "${IDE_LOCK_SNAPSHOTS[@]}"
+    IDE_LOCK_SNAPSHOTS=()
   fi
   if [ -n "$YOLO_MARKER" ]; then
     rm -f "$YOLO_MARKER"
@@ -772,10 +772,17 @@ IDE_RO_ARGS=()
 if [ -d "$HOME/.claude" ]; then
   mkdir -p "$HOME/.claude/ide" 2>/dev/null || true
 fi
+
+# Read-only is not enough on its own, though: the lockfile is also how OTHER agents
+# find the editor. pi's IDE extension here reads the very same ~/.claude/ide/<port>.lock
+# and drops any lock whose recorded pid is not alive, with no CLAUDE_CODE_SSE_PORT
+# escape hatch of its own -- so inside the PID namespace it decides every editor is
+# gone and reports VS Code disconnected. The dir therefore gets the same sanitized
+# snapshot treatment as pi's own lock dirs (see snapshot_ide_lock_dir below), which
+# also leaves claude's CLAUDE_CODE_SSE_PORT path untouched: that one matches on the
+# port in the filename and never looks at the pid.
 claude_ide_dir=""
-if claude_ide_dir="$(realpath -q "$HOME/.claude/ide")" && [ -d "$claude_ide_dir" ]; then
-  IDE_RO_ARGS+=(--ro-bind "$claude_ide_dir" "$claude_ide_dir")
-else
+if ! claude_ide_dir="$(realpath -q "$HOME/.claude/ide")" || [ ! -d "$claude_ide_dir" ]; then
   claude_ide_dir=""
 fi
 
@@ -850,16 +857,31 @@ fi
 # the copies gives them a current mtime for free, and the bind keeps the originals out
 # of the sandbox's reach at the same time. Dead lockfiles are left out rather than
 # sanitized, so a stale one still looks stale from inside.
-snapshot_pi_ide_lock_dir() {
+#
+# ~/.claude/ide goes through the same pass, for the reason given where claude_ide_dir
+# is resolved: it is read by more than just claude, and the readers that are not claude
+# have no CLAUDE_CODE_SSE_PORT to fall back on. Dropping the pid costs claude nothing,
+# because a host pid never passes its alive-and-an-ancestor test in here anyway.
+snapshot_ide_lock_dir() {
   local lock_dir
   lock_dir="$(realpath -q "$1")" || return 0
   [ -d "$lock_dir" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
 
   local snapshot lock pid name
+  # Without jq there is nothing to sanitize with, and without a snapshot dir there is
+  # nowhere to put the result. Fall back to binding the real directory read-only:
+  # discovery is no better than before, but the host's lockfiles still survive the
+  # sandboxed reaper and the agent still cannot plant one of its own.
+  if ! command -v jq >/dev/null 2>&1; then
+    IDE_RO_ARGS+=(--ro-bind "$lock_dir" "$lock_dir")
+    return 0
+  fi
   # $XDG_RUNTIME_DIR before /tmp: the sandbox replaces /tmp with a tmpfs, and a
   # snapshot the agent can neither see nor reach is one less thing to reason about.
-  snapshot="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/agent-safe-pi-ide.XXXXXX" 2>/dev/null)" || return 0
+  if ! snapshot="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/agent-safe-ide.XXXXXX" 2>/dev/null)"; then
+    IDE_RO_ARGS+=(--ro-bind "$lock_dir" "$lock_dir")
+    return 0
+  fi
   chmod 700 "$snapshot" 2>/dev/null || true
 
   for lock in "$lock_dir"/*.lock; do
@@ -879,14 +901,15 @@ snapshot_pi_ide_lock_dir() {
   # Bound even when it copied nothing: an empty snapshot says "no live editor", which
   # is the truth, and it still keeps the agent from planting a lockfile of its own in
   # a directory that a pi session on the host reads and connects to.
-  PI_IDE_LOCK_SNAPSHOTS+=("$snapshot")
+  IDE_LOCK_SNAPSHOTS+=("$snapshot")
   IDE_RO_ARGS+=(--ro-bind "$snapshot" "$lock_dir")
 }
 
-for pi_lock_dir in "$HOME/.pi/pi-x-ide/lock" "$HOME/.pi/ide"; do
-  snapshot_pi_ide_lock_dir "$pi_lock_dir"
+for ide_lock_dir in "$HOME/.pi/pi-x-ide/lock" "$HOME/.pi/ide" "$claude_ide_dir"; do
+  [ -n "$ide_lock_dir" ] || continue
+  snapshot_ide_lock_dir "$ide_lock_dir"
 done
-if [ "${#PI_IDE_LOCK_SNAPSHOTS[@]}" -gt 0 ]; then
+if [ "${#IDE_LOCK_SNAPSHOTS[@]}" -gt 0 ]; then
   trap cleanup EXIT INT TERM
 fi
 
