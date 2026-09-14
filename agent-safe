@@ -234,7 +234,7 @@ case "$TARGET" in
     ;;
   claude)
     command -v claude >/dev/null 2>&1 || { echo "agent-safe: 'claude' not found in PATH" >&2; exit 1; }
-    RUN_CMD=(claude --dangerously-skip-permissions "$@")
+    RUN_CMD=(claude --dangerously-skip-permissions --settings '{"sandbox":{"enabled":false}}' "$@")
     ;;
   codex)
     command -v codex >/dev/null 2>&1 || { echo "agent-safe: 'codex' not found in PATH" >&2; exit 1; }
