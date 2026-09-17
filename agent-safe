@@ -946,11 +946,57 @@ if [[ -d "$HOME/.gradle" ]]; then
   BWRAP_ARGS+=(--tmpfs "$HOME/.gradle/daemon")
 fi
 
-masked_socks=""
+masked_socks=()
+
+mask_socket() {
+  local target="$1"
+  local real_target
+  real_target="$(realpath -q "$target" 2>/dev/null)" || return 0
+  [[ -S "$real_target" || -e "$real_target" ]] || return 0
+
+  local p
+  for p in ${masked_socks[@]+"${masked_socks[@]}"}; do
+    if [[ "$real_target" == "$p" || "$real_target" == "$p"/* ]]; then
+      return 0
+    fi
+  done
+
+  # Build path components from root to target to verify all ancestor directories
+  # are readable by the current user. If an ancestor directory cannot be read
+  # (e.g. /run/containerd with mode 0711), bwrap's openat2() fails with EACCES
+  # when resolving parent mountpoints. In that case, mask the topmost
+  # unreadable directory with tmpfs instead of binding /dev/null to the socket.
+  local cur="$real_target"
+  local components=()
+  while [[ "$cur" != "/" && "$cur" != "." ]]; do
+    components=("$cur" "${components[@]}")
+    cur="$(dirname "$cur")"
+  done
+
+  local unreadable_dir=""
+  local c
+  for c in "${components[@]}"; do
+    if [[ "$c" == "$real_target" ]]; then
+      break
+    fi
+    if [[ ! -r "$c" ]]; then
+      unreadable_dir="$c"
+      break
+    fi
+  done
+
+  if [[ -n "$unreadable_dir" ]]; then
+    masked_socks+=("$unreadable_dir")
+    BWRAP_ARGS+=(--tmpfs "$unreadable_dir")
+  else
+    masked_socks+=("$real_target")
+    BWRAP_ARGS+=(--ro-bind /dev/null "$real_target")
+  fi
+}
 
 # Container engine sockets allow an agent to control a host daemon (usually running
 # as root or with host user access), mount host filesystems read-write, and bypass
-# the sandbox completely. Mask them with /dev/null and strip environment pointers.
+# the sandbox completely. Mask them with /dev/null (or tmpfs) and strip environment pointers.
 if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
   CONTAINER_SOCKS=(
     "/run/docker.sock"
@@ -970,13 +1016,7 @@ if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
   fi
 
   for sock in "${CONTAINER_SOCKS[@]}"; do
-    real_sock="$(realpath -q "$sock" 2>/dev/null)" || continue
-    [[ -S "$real_sock" || -e "$real_sock" ]] || continue
-    case ":$masked_socks:" in
-      *":$real_sock:"*) continue ;;
-    esac
-    masked_socks="$masked_socks:$real_sock"
-    BWRAP_ARGS+=(--ro-bind /dev/null "$real_sock")
+    mask_socket "$sock"
   done
 
   BWRAP_ARGS+=(
@@ -997,13 +1037,7 @@ HOST_IPC_SOCKS=(
   "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pulse/native"
 )
 for sock in "${HOST_IPC_SOCKS[@]}"; do
-  real_sock="$(realpath -q "$sock" 2>/dev/null)" || continue
-  [[ -S "$real_sock" || -e "$real_sock" ]] || continue
-  case ":$masked_socks:" in
-    *":$real_sock:"*) continue ;;
-  esac
-  masked_socks="$masked_socks:$real_sock"
-  BWRAP_ARGS+=(--ro-bind /dev/null "$real_sock")
+  mask_socket "$sock"
 done
 
 BWRAP_ARGS+=(
