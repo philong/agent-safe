@@ -547,6 +547,10 @@ CACHE_DIRS=(
   "$HOME/.gradle/.tmp"
   "$HOME/.gradle/kotlin-profile"
   "$HOME/.gradle/android"
+  "$HOME/.gradle/notifications"
+  "$HOME/.gradle/build-scans"
+  "$HOME/.gradle/develocity"
+  "$HOME/.gradle/enterprise"
   "$HOME/.ivy2/cache"
   "$HOME/.cache/coursier"
   # java.util.prefs and the AWT font cache; the JVM throws on a read-only one.
