@@ -226,7 +226,7 @@ case "$TARGET" in
   pi-web)
     command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
     ENABLE_PI_YOLO=true
-    RUN_CMD=(pnpx "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
+    RUN_CMD=(pnpx --allow-build=@google/genai --allow-build=esbuild --allow-build=node-pty --allow-build=protobufjs "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
     ;;
   agy)
     command -v agy >/dev/null 2>&1 || { echo "agent-safe: 'agy' not found in PATH" >&2; exit 1; }
