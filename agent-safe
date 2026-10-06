@@ -189,6 +189,22 @@ can_sandbox() {
   [[ "${AGENT_SAFE:-0}" == "1" ]] && return 1
   command -v bwrap >/dev/null 2>&1 && bwrap --ro-bind / / true >/dev/null 2>&1
 }
+SANDBOX_OK=1
+can_sandbox || SANDBOX_OK=0
+
+# Fail closed, and before anything below touches agent settings or repo files.
+# Every target runs with its permission prompts off (and claude's and agy's own
+# sandboxes disabled), which is only acceptable inside bwrap. A dry run still
+# prints what it would do.
+if [[ "$SANDBOX_OK" -eq 0 && "${AGENT_SAFE:-0}" != "1" && "${AGENT_SAFE_ALLOW_UNSANDBOXED:-0}" != "1" && "$DRY_RUN" -eq 0 ]]; then
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "agent-safe: bwrap not found; install bubblewrap" >&2
+  else
+    echo "agent-safe: bwrap cannot create a sandbox here (inside a container, or unprivileged user namespaces disabled)" >&2
+  fi
+  echo "agent-safe: refusing to run unsandboxed; set AGENT_SAFE_ALLOW_UNSANDBOXED=1 to override" >&2
+  exit 1
+fi
 : "${HOME:?agent-safe: HOME is not set}"
 
 RUN_CMD=()
@@ -1310,14 +1326,15 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-if ! can_sandbox; then
+# Only a nested run or AGENT_SAFE_ALLOW_UNSANDBOXED=1 gets here; the rest were
+# refused up top.
+if [[ "$SANDBOX_OK" -eq 0 ]]; then
   local_target="$TARGET"
   [[ "$local_target" == "raw" ]] && local_target="command"
   if [[ "${AGENT_SAFE:-0}" == "1" ]]; then
     echo "agent-safe: already inside sandbox; running $local_target directly in $PROJECT_DIR" >&2
   else
-    echo "agent-safe: sandbox unavailable (already in container/sandbox or unprivileged userns disabled)" >&2
-    echo "agent-safe: running $local_target directly in $PROJECT_DIR" >&2
+    echo "agent-safe: sandbox unavailable; AGENT_SAFE_ALLOW_UNSANDBOXED=1, running $local_target UNSANDBOXED in $PROJECT_DIR" >&2
   fi
   cd "$PROJECT_DIR"
   "${RUN_CMD[@]}"
