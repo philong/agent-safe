@@ -703,62 +703,219 @@ done
 # and core.sshCommand, core.pager, core.editor, alias.*, filter.*.clean/smudge and
 # diff.*.textconv all name commands that git runs ON THE HOST. The cost is that
 # `git config` and `git remote add` fail inside the sandbox; run them outside.
-# Submodule gitdirs under .git/modules/ carry their own config and hooks, so they
-# get the same treatment.
+# Submodule gitdirs under .git/modules/, linked worktree gitdirs under
+# .git/worktrees/ and embedded .git directories inside the project get the same
+# treatment.
 #
 # For worktrees and repo subdirectories the real .git is outside $PROJECT_DIR and
 # also has to be bound writable, or git refuses to commit.
+#
+# Read-only binds alone do not survive the agent renaming a gitdir out of the way:
+# mounts travel with a renamed directory, so `mv .git .git-old` (or `mv
+# .git/modules/sub ...`) followed by a fresh config setting core.fsmonitor hands
+# the host's next `git status` a command to run. rename() refuses to move a
+# mountpoint, so every gitdir is also bound onto itself, writable since git still
+# has to commit, and so is every directory between it and the writable bind it
+# lives in: rename() does move a directory that merely contains a mountpoint, so
+# `mv libs libs-old` would carry a pinned libs/sub along and leave a fresh
+# libs/sub/.git to be written. Where .git is a "gitdir:" pointer file (linked
+# worktrees, submodules) the pointer is bound read-only instead, with its checkout
+# pinned the same way. The writable binds themselves need no pin: being a bind
+# already makes each a mountpoint, and anything above them is read-only.
 GIT_RO_ARGS=()
+GIT_PIN_ARGS=()
+git_ro_paths=()
+git_pin_paths=()
+git_writable_roots=("$PROJECT_DIR")
+git_protected=""
+git_pinned=""
+
+# Everything walked below sits in agent-writable directories, so any of it may be a
+# symlink planted in an earlier session: `.git/modules -> ~/.local` would have us
+# write into ~/.local and, since bwrap follows a symlink at a mount destination,
+# pin it writable. Only a path that is its own realpath, with no symlink anywhere
+# along it, is trusted.
+git_resolved() {
+  [ "$(realpath -q -- "$1")" = "$1" ] && return 0
+  echo "agent-safe: not protecting $1: it is or passes through a symlink" >&2
+  return 1
+}
+
+# Pins $1 and every directory between it and the writable bind holding it. Returns
+# 1 when $1 is not strictly inside a writable bind, i.e. when the sandbox cannot
+# write it anyway, or when it is not a resolved path.
+git_pin() {
+  local root cur part
+  git_resolved "$1" || return 1
+  for root in "${git_writable_roots[@]}"; do
+    case "$1" in "$root"/*) ;; *) continue ;; esac
+    cur="$root"
+    while IFS= read -r -d / part; do
+      cur="$cur/$part"
+      git_pin_paths+=("$cur")
+    done < <(printf '%s/' "${1#"$root"/}")
+    return 0
+  done
+  return 1
+}
+
+# Protects one gitdir, resolved, and every gitdir it holds.
+protect_gitdir() {
+  local gitdir="$1" wt_config=false wt_dir root common
+  case ":$git_protected:" in *":$gitdir:"*) return 0 ;; esac
+  git_protected="$git_protected:$gitdir"
+  git_resolved "$gitdir" || return 0
+  # A writable bind root is already a mountpoint; anything outside one is read-only.
+  for root in "${git_writable_roots[@]}"; do
+    [ "$gitdir" = "$root" ] && break
+  done
+  [ "$gitdir" = "$root" ] || git_pin "$gitdir" || return 0
+  if [ -f "$gitdir/commondir" ]; then
+    git_ro_paths+=("$gitdir/commondir")
+    # One that points elsewhere makes this a linked worktree's gitdir, which its
+    # common dir takes care of; one pointing back here is ours, from an earlier run.
+    common="$(head -n 1 "$gitdir/commondir" 2>/dev/null)"
+    common="$(cd "$gitdir" && realpath -q -- "${common%$'\r'}")" || return 0
+    [ "$common" = "$gitdir" ] || return 0
+  fi
+  # git reads $GIT_DIR/commondir in ANY gitdir, not just a linked worktree's, and
+  # takes config, hooks and everything else from the directory it names. An agent
+  # writing one into .git would bypass every read-only bind here, so give each
+  # common dir a commondir of its own, pointing at itself, and bind it read-only.
+  # An empty or unreadable commondir makes git die, so it has to hold ".".
+  [ -e "$gitdir/commondir" ] || [ -L "$gitdir/commondir" ] ||
+    printf '.\n' > "$gitdir/commondir" 2>/dev/null || true
+  mkdir -p "$gitdir/hooks" 2>/dev/null || true
+  git_ro_paths+=("$gitdir/commondir" "$gitdir/config" "$gitdir/config.worktree" "$gitdir/hooks")
+  # A linked worktree's own gitdir holds a second config file, and core.hooksPath
+  # set there is honored just as it is in the common config. It only counts when
+  # extensions.worktreeConfig is on, and that flag lives in the config we just
+  # made read-only, so it cannot be switched on from inside the sandbox; when it
+  # is already on, every worktree needs the same treatment. Create the file where
+  # it is missing, or there is nothing to bind over and the agent can write a
+  # fresh one. `git sparse-checkout set` turns the extension on by itself, so
+  # this is not an exotic setup.
+  if [ "$(git config -f "$gitdir/config" --get extensions.worktreeConfig 2>/dev/null)" = true ]; then
+    wt_config=true
+    [ -e "$gitdir/config.worktree" ] || [ -L "$gitdir/config.worktree" ] ||
+      : > "$gitdir/config.worktree" 2>/dev/null || true
+  fi
+  for wt_dir in "$gitdir"/worktrees/*/; do
+    wt_dir="${wt_dir%/}"
+    [ -d "$wt_dir" ] || continue
+    git_pin "$wt_dir" || continue
+    # commondir is what makes it a worktree of this repo; rewritten, it would point
+    # the worktree at any config the agent likes.
+    git_ro_paths+=("$wt_dir/commondir")
+    if [ "$wt_config" = true ]; then
+      [ -e "$wt_dir/config.worktree" ] || [ -L "$wt_dir/config.worktree" ] ||
+        : > "$wt_dir/config.worktree" 2>/dev/null || true
+      git_ro_paths+=("$wt_dir/config.worktree")
+    fi
+  done
+  if [ -d "$gitdir/modules" ]; then
+    walk_git_modules "$gitdir/modules"
+  fi
+}
+
+# Submodule gitdirs live at modules/<name>, and a name may contain slashes, so a
+# directory without a HEAD is one more component of a name rather than a gitdir.
+walk_git_modules() {
+  local dir
+  git_resolved "$1" || return 0
+  for dir in "$1"/*/ "$1"/.[!.]*/; do
+    dir="${dir%/}"
+    [ -d "$dir" ] || continue
+    git_resolved "$dir" || continue
+    if [ -f "$dir/HEAD" ]; then
+      protect_gitdir "$dir"
+    else
+      walk_git_modules "$dir"
+    fi
+  done
+}
+
+# Pins a checkout's .git, and those of its submodules, nested ones included.
+pin_git_checkout() {
+  local dir dotgit sub_path
+  dir="$(realpath -q "$1")" || return 0
+  [ -d "$dir" ] || return 0
+  case ":$git_pinned:" in *":$dir:"*) return 0 ;; esac
+  git_pinned="$git_pinned:$dir"
+  case "$dir/" in
+    "$PROJECT_DIR"/*)
+      dotgit="$dir/.git"
+      # bwrap follows a symlink at a mount destination, and the paths that lead here
+      # (.gitmodules, .git/worktrees/*/gitdir) are all agent-writable: a planted
+      # `.git -> ../../.local/bin` would turn a writable pin into a writable
+      # ~/.local/bin. A real .git is never a symlink, so leave such a checkout alone.
+      if [ -L "$dotgit" ]; then
+        echo "agent-safe: not pinning $dotgit: it is a symlink" >&2
+        return 0
+      fi
+      if [ -d "$dotgit" ]; then
+        protect_gitdir "$dotgit"
+      elif [ -f "$dotgit" ]; then
+        git_pin "$dir" || true
+        git_ro_paths+=("$dotgit")
+      fi
+      ;;
+    *)
+      # A repo the project is a subdirectory of: its .git is not ours to pin, but
+      # submodules inside the project still are.
+      case "$PROJECT_DIR/" in "$dir"/*) ;; *) return 0 ;; esac
+      ;;
+  esac
+  # .gitmodules is only read for paths here, and anything it names outside
+  # $PROJECT_DIR (and not holding it) is dropped by the checks above.
+  [ -f "$dir/.gitmodules" ] || return 0
+  while IFS= read -r sub_path; do
+    if [ -e "$dir/$sub_path/.git" ]; then
+      pin_git_checkout "$dir/$sub_path"
+    fi
+  done < <(git config -f "$dir/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)
+}
+
 if git_common="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)"; then
   git_common="$(cd "$PROJECT_DIR" && realpath -q "$git_common")" || git_common=""
   if [ -n "$git_common" ]; then
-    mkdir -p "$git_common/hooks" 2>/dev/null || true
     if [ "${git_common#"$PROJECT_DIR"/}" = "$git_common" ]; then
       add_bind "$git_common"
+      git_writable_roots+=("$git_common")
     fi
-    # Applied after the $PROJECT_DIR bind below, which would otherwise re-expose
-    # these as writable.
-    git_ro_paths=(
-      "$git_common/config"
-      "$git_common/config.worktree"
-      "$git_common/hooks"
-    )
-    if [ -d "$git_common/modules" ]; then
-      # -name objects -prune keeps this off the loose object store, which is the
-      # only part of a gitdir big enough for the walk to be noticeable.
-      while IFS= read -r -d '' module_path; do
-        git_ro_paths+=("$module_path")
-      done < <(find "$git_common/modules" -name objects -prune -o \
-        \( -name config -o -name config.worktree -o -name hooks \) -print0 2>/dev/null)
-    fi
-    # A linked worktree's own gitdir holds a second config file, and core.hooksPath
-    # set there is honored just as it is in the common config. It only counts when
-    # extensions.worktreeConfig is on, and that flag lives in the config we just
-    # made read-only, so it cannot be switched on from inside the sandbox; when it
-    # is already on, every worktree needs the same treatment. Create the file where
-    # it is missing, or there is nothing to bind over and the agent can write a
-    # fresh one. `git sparse-checkout set` turns the extension on by itself, so
-    # this is not an exotic setup.
-    if [ "$(git -C "$PROJECT_DIR" config --get extensions.worktreeConfig 2>/dev/null)" = true ]; then
-      wt_configs=("$git_common/config.worktree")
-      for wt_dir in "$git_common"/worktrees/*/; do
-        [ -d "$wt_dir" ] || continue
-        wt_configs+=("${wt_dir}config.worktree")
-      done
-      for wt_config in "${wt_configs[@]}"; do
-        [ -e "$wt_config" ] || : > "$wt_config" 2>/dev/null || true
-        git_ro_paths+=("$wt_config")
-      done
-    fi
-    git_ro_bound=""
-    for git_ro in "${git_ro_paths[@]}"; do
-      git_ro="$(realpath -q "$git_ro")" || continue
-      [ -e "$git_ro" ] || continue
-      case ":$git_ro_bound:" in *":$git_ro:"*) continue ;; esac
-      git_ro_bound="$git_ro_bound:$git_ro"
-      GIT_RO_ARGS+=(--ro-bind "$git_ro" "$git_ro")
-    done
+    protect_gitdir "$git_common"
   fi
+  if git_top="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)"; then
+    pin_git_checkout "$git_top"
+  fi
+  # Linked worktrees that live inside the project carry a writable pointer file too.
+  while IFS= read -r wt_line; do
+    case "$wt_line" in "worktree "*) pin_git_checkout "${wt_line#worktree }" ;; esac
+  done < <(git -C "$PROJECT_DIR" worktree list --porcelain 2>/dev/null)
+
+  # Pins go first, parents before children (which a byte-order sort gives), so no
+  # pin covers another mount; bwrap binds from the host side, so a later bind of a
+  # parent would hide everything mounted beneath it. The read-only binds follow,
+  # and all of this is applied after the $PROJECT_DIR bind, which would otherwise
+  # re-expose it as writable.
+  if [ ${#git_pin_paths[@]} -gt 0 ]; then
+    while IFS= read -r -d '' git_pin_path; do
+      GIT_PIN_ARGS+=(--bind "$git_pin_path" "$git_pin_path")
+    done < <(printf '%s\0' "${git_pin_paths[@]}" | LC_ALL=C sort -zu)
+  fi
+  git_ro_bound=""
+  for git_ro in "${git_ro_paths[@]}"; do
+    # A symlink cannot be mounted over, only its target, and the symlink itself
+    # stays replaceable (`.git/hooks -> ../githooks` is the usual case).
+    if [ -L "$git_ro" ]; then
+      echo "agent-safe: warning: $git_ro is a symlink; the sandbox can replace it with its own" >&2
+    fi
+    git_ro="$(realpath -q "$git_ro")" || continue
+    [ -e "$git_ro" ] || continue
+    case ":$git_ro_bound:" in *":$git_ro:"*) continue ;; esac
+    git_ro_bound="$git_ro_bound:$git_ro"
+    GIT_RO_ARGS+=(--ro-bind "$git_ro" "$git_ro")
+  done
 fi
 
 # Claude Code's IDE integration: the editor extension publishes its WebSocket port,
@@ -1089,6 +1246,7 @@ fi
 BWRAP_ARGS+=(
   "${BIND_ARGS[@]}"
   --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  "${GIT_PIN_ARGS[@]}"
   "${GIT_RO_ARGS[@]}"
   "${IDE_RO_ARGS[@]}"
   --chdir "$PROJECT_DIR"
