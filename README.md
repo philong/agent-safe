@@ -153,6 +153,8 @@ AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>
 ## Notes
 
 - Network access is enabled by default (use `--offline` to disable).
+- `agent-safe` warns on start when run with `$HOME` (or `/`, or any parent of `$HOME`) as the project directory, since that makes your whole home writable.
+- User-provided write mounts (`-w` and `AGENT_SAFE_WRITE`) have the last say and are applied after masks and protections, allowing them to re-expose paths (such as `-w ~/.ssh` or `-w ~`). Default project and cache binds are applied before masks, so running in `$HOME` without `-w` still leaves host secrets masked (or use `--no-mask` to opt out of secret masking entirely).
 - If running inside an existing container or sandbox where nested Bubblewrap is unavailable, `agent-safe` automatically detects it and falls back to running the agent directly.
 - Do not install the `pi-sandbox` extension when using `agent-safe`, as it conflicts.
 

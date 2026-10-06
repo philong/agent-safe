@@ -178,6 +178,13 @@ if ! project_dir_real="$(realpath -e -- "$PROJECT_DIR" 2>/dev/null)"; then
 fi
 PROJECT_DIR="$project_dir_real"
 
+# A writable $HOME (or anything above it) makes shell rc files, ~/.local/bin,
+# ~/.config/autostart and every agent's hooks fair game, but warn rather than refuse.
+home_real="$(realpath -q -- "${HOME:?agent-safe: HOME is not set}")" || home_real="$HOME"
+if [ "$PROJECT_DIR" = / ] || [ "${home_real#"$PROJECT_DIR"/}" != "$home_real" ] || [ "$PROJECT_DIR" = "$home_real" ]; then
+  echo "agent-safe: warning: making $PROJECT_DIR writable; it is your home directory or one of its parents" >&2
+fi
+
 can_sandbox() {
   [[ "${AGENT_SAFE:-0}" == "1" ]] && return 1
   command -v bwrap >/dev/null 2>&1 && bwrap --ro-bind / / true >/dev/null 2>&1
@@ -652,16 +659,42 @@ CACHE_FILES=(
 #                        downloaded wrappers containing shell scripts/executables
 # Installing a toolchain or a global CLI therefore has to happen outside agent-safe.
 
-# Append extra directory binds from CLI flags (-w / --write)
+# User-provided extra write mounts from CLI flags (-w / --write) and AGENT_SAFE_WRITE.
+# These have the last say and are applied AFTER all masks and read-only protections.
+USER_WRITE_DIRS=()
 if [[ ${#EXTRA_WRITE_CLI[@]} -gt 0 ]]; then
-  CACHE_DIRS+=("${EXTRA_WRITE_CLI[@]}")
+  USER_WRITE_DIRS+=("${EXTRA_WRITE_CLI[@]}")
 fi
 
-# Escape hatch: AGENT_SAFE_WRITE=/path/one:/path/two agent-safe
 EXTRA_WRITE="${AGENT_SAFE_WRITE:-}"
 if [ -n "$EXTRA_WRITE" ]; then
   IFS=':' read -r -a extra_write_dirs <<<"$EXTRA_WRITE"
-  CACHE_DIRS+=("${extra_write_dirs[@]}")
+  USER_WRITE_DIRS+=("${extra_write_dirs[@]}")
+fi
+
+USER_WRITE_ARGS=()
+user_bound=""
+
+add_user_write() {
+  local path="$1" real parent
+  path="${path/#\~/$HOME}"
+  if [ ! -e "$path" ]; then
+    parent="$(dirname "$path")"
+    if [ -d "$parent" ]; then
+      mkdir -p "$path" 2>/dev/null || true
+    fi
+  fi
+  real="$(realpath -q "$path")" || return 0
+  [ -e "$real" ] || return 0
+  case ":$user_bound:" in *":$real:"*) return 0 ;; esac
+  user_bound="$user_bound:$real"
+  USER_WRITE_ARGS+=(--bind "$real" "$real")
+}
+
+if [[ ${#USER_WRITE_DIRS[@]} -gt 0 ]]; then
+  for dir in "${USER_WRITE_DIRS[@]}"; do
+    add_user_write "$dir"
+  done
 fi
 
 BIND_ARGS=()
@@ -1092,6 +1125,19 @@ BWRAP_ARGS=(
   --die-with-parent
 )
 
+# Default cache binds and project dir go after --tmpfs /tmp, which would otherwise
+# silently shadow any bind resolving under /tmp, and before masks so default
+# binds (like project dir when in $HOME) do not re-expose secrets or sockets.
+# User-provided write mounts (-w / --write and AGENT_SAFE_WRITE) are applied after
+# all masks and protections below, so user requests have the last say.
+BWRAP_ARGS+=(
+  "${BIND_ARGS[@]}"
+  --bind "$PROJECT_DIR" "$PROJECT_DIR"
+  "${GIT_PIN_ARGS[@]}"
+  "${GIT_RO_ARGS[@]}"
+  "${IDE_RO_ARGS[@]}"
+)
+
 if [[ -d /etc/ssh/ssh_config.d ]]; then
   BWRAP_ARGS+=(--tmpfs /etc/ssh/ssh_config.d)
 fi
@@ -1241,14 +1287,13 @@ if [[ "$OFFLINE" -eq 1 ]]; then
   BWRAP_ARGS+=(--unshare-net)
 fi
 
-# Binds go after --tmpfs /tmp, which would otherwise silently shadow any bind
-# resolving under /tmp.
+# User-provided extra write mounts (-w / --write and AGENT_SAFE_WRITE) have the
+# last say, applied after all masks and protections.
+if [[ ${#USER_WRITE_ARGS[@]} -gt 0 ]]; then
+  BWRAP_ARGS+=("${USER_WRITE_ARGS[@]}")
+fi
+
 BWRAP_ARGS+=(
-  "${BIND_ARGS[@]}"
-  --bind "$PROJECT_DIR" "$PROJECT_DIR"
-  "${GIT_PIN_ARGS[@]}"
-  "${GIT_RO_ARGS[@]}"
-  "${IDE_RO_ARGS[@]}"
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
   --setenv AGENT_SAFE 1
