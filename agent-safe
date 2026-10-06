@@ -51,6 +51,9 @@ PROG="$(basename "$0")"
 TARGET=""
 
 case "$PROG" in
+  # The script's own name (agent-safe, agent-safe.sh, ...) picks nothing; without
+  # this, the ".sh" of an agent-safe.sh install matched *sh* below.
+  agent-safe*) TARGET="" ;;
   *pi-web*|*web*) TARGET="pi-web" ;;
   *copilot*) TARGET="copilot" ;;
   *opencode*) TARGET="opencode" ;;
@@ -62,6 +65,7 @@ case "$PROG" in
   *shell*|*bash*|*sh*) TARGET="shell" ;;
   *)         TARGET="" ;;
 esac
+PROG_TARGET="$TARGET"
 
 MASK_SECRETS=1
 if [[ "${AGENT_SAFE_NO_MASK:-0}" == "1" ]]; then
@@ -105,57 +109,25 @@ while [[ $# -gt 0 ]]; do
       MASK_SECRETS=0
       shift
       ;;
-    --pi|pi)
-      TARGET="pi"
-      shift
-      break
-      ;;
-    --pi-web|pi-web|--web|web)
-      TARGET="pi-web"
-      shift
-      break
-      ;;
-    --agy|agy)
-      TARGET="agy"
-      shift
-      break
-      ;;
-    --claude|claude)
-      TARGET="claude"
-      shift
-      break
-      ;;
-    --codex|codex)
-      TARGET="codex"
-      shift
-      break
-      ;;
-    --copilot|copilot)
-      TARGET="copilot"
-      shift
-      break
-      ;;
-    --aider|aider)
-      TARGET="aider"
-      shift
-      break
-      ;;
-    --opencode|opencode)
-      TARGET="opencode"
-      shift
-      break
-      ;;
-    shell|bash|sh)
-      TARGET="shell"
-      shift
-      break
-      ;;
-    run|--)
-      TARGET="raw"
-      shift
-      break
-      ;;
     *)
+      # Invoked as claude-safe & co., the name already picked the target, so a
+      # leading "run", "shell" or agent name belongs to the agent
+      # (`opencode-safe run "..."`), not to us.
+      [[ -z "$PROG_TARGET" ]] || break
+      case "$1" in
+        --pi|pi)                     TARGET="pi" ;;
+        --pi-web|pi-web|--web|web)   TARGET="pi-web" ;;
+        --agy|agy)                   TARGET="agy" ;;
+        --claude|claude)             TARGET="claude" ;;
+        --codex|codex)               TARGET="codex" ;;
+        --copilot|copilot)           TARGET="copilot" ;;
+        --aider|aider)               TARGET="aider" ;;
+        --opencode|opencode)         TARGET="opencode" ;;
+        shell|bash|sh)               TARGET="shell" ;;
+        run|--)                      TARGET="raw" ;;
+        *)                           break ;;
+      esac
+      shift
       break
       ;;
   esac

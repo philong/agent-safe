@@ -55,6 +55,8 @@ ln -sf ~/.local/bin/agent-safe ~/.local/bin/aider-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/opencode-safe
 ```
 
+A shortcut fixes the target, so everything after its options goes to the agent: `opencode-safe run "..."` runs `opencode run`, not agent-safe's `run` mode.
+
 ## Usage
 
 ### 1. Pi CLI (`pi`)
