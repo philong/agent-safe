@@ -326,14 +326,32 @@ set_yolo_mode() {
 YOLO_RUN_DIR="$PI_DIR/.agent-safe-yolo"
 YOLO_MARKER=""
 
-yolo_live_sessions() {
-  local marker pid count=0
-  for marker in "$YOLO_RUN_DIR"/*; do
+# A nested run (agent-safe invoked from inside an agent-safe sandbox) shares these
+# marker directories with the host, but sits in the outer sandbox's PID namespace,
+# where no host pid exists: reaping by `kill -0` there would delete every live
+# session's marker and switch the setting back underneath them. So a nested run
+# names its marker after the outer agent-safe's host pid (exported into the
+# sandbox), "<host pid>.n<own pid>", which the host reaps once that outer session
+# is gone, and it never reaps anything itself. Without a host pid to borrow, a
+# nested run leaves the settings alone entirely.
+SESSION_MARKER_NAME="$$"
+CAN_TRACK_SESSIONS=1
+if [[ "${AGENT_SAFE:-0}" == "1" ]]; then
+  if [[ "${AGENT_SAFE_HOST_PID:-}" =~ ^[0-9]+$ ]]; then
+    SESSION_MARKER_NAME="$AGENT_SAFE_HOST_PID.n$$"
+  else
+    CAN_TRACK_SESSIONS=0
+  fi
+fi
+
+live_sessions() {
+  local marker name count=0
+  for marker in "$1"/*; do
     [ -f "$marker" ] || continue
-    pid="${marker##*/}"
+    name="${marker##*/}"
     # Anything not named after a pid is bookkeeping (the "prior" file), not a session.
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    if ! kill -0 "$pid" 2>/dev/null; then
+    [[ "$name" =~ ^([0-9]+)(\.n[0-9]+)?$ ]] || continue
+    if [[ "${AGENT_SAFE:-0}" != "1" ]] && ! kill -0 "${BASH_REMATCH[1]}" 2>/dev/null; then
       rm -f "$marker"
       continue
     fi
@@ -421,21 +439,6 @@ restore_agy_terminal_sandbox() {
   rm -f "$AGY_RUN_DIR/prior"
 }
 
-agy_live_sessions() {
-  local marker pid count=0
-  for marker in "$AGY_RUN_DIR"/*; do
-    [ -f "$marker" ] || continue
-    pid="${marker##*/}"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    if ! kill -0 "$pid" 2>/dev/null; then
-      rm -f "$marker"
-      continue
-    fi
-    count=$((count + 1))
-  done
-  echo "$count"
-}
-
 IDE_LOCK_SNAPSHOTS=()
 
 cleanup() {
@@ -445,24 +448,27 @@ cleanup() {
     IDE_LOCK_SNAPSHOTS=()
   fi
   if [ -n "$YOLO_MARKER" ]; then
-    rm -f "$YOLO_MARKER"
+    # Also drop the markers of runs nested in this session ("$$.n<pid>"): the sandbox
+    # is gone by now, and one that was SIGKILLed with it never removed its own. It is
+    # named after our pid, still alive here, so it would count as a live session.
+    rm -f "$YOLO_MARKER" "$YOLO_MARKER".n*
     YOLO_MARKER=""
     # Restore only once the last session is gone, and only to what we found.
-    if [ "$(yolo_live_sessions)" -eq 0 ] && [ -f "$YOLO_RUN_DIR/prior" ]; then
+    if [ "$(live_sessions "$YOLO_RUN_DIR")" -eq 0 ] && [ -f "$YOLO_RUN_DIR/prior" ]; then
       set_yolo_mode "$(cat "$YOLO_RUN_DIR/prior")"
       rm -f "$YOLO_RUN_DIR/prior"
     fi
   fi
   if [ -n "$AGY_MARKER" ]; then
-    rm -f "$AGY_MARKER"
+    rm -f "$AGY_MARKER" "$AGY_MARKER".n*
     AGY_MARKER=""
-    if [ "$(agy_live_sessions)" -eq 0 ]; then
+    if [ "$(live_sessions "$AGY_RUN_DIR")" -eq 0 ]; then
       restore_agy_terminal_sandbox
     fi
   fi
 }
 
-if [[ "$ENABLE_PI_YOLO" == true ]]; then
+if [[ "$ENABLE_PI_YOLO" == true && "$CAN_TRACK_SESSIONS" -eq 1 ]]; then
   if mkdir -p "$YOLO_RUN_DIR" 2>/dev/null; then
     # Snapshot only when no record survives. A leftover "prior" with no live
     # session means an earlier run was killed before it could restore; that file
@@ -476,14 +482,14 @@ if [[ "$ENABLE_PI_YOLO" == true ]]; then
       fi
       printf '%s' "$prior" > "$YOLO_RUN_DIR/prior" 2>/dev/null || true
     fi
-    YOLO_MARKER="$YOLO_RUN_DIR/$$"
+    YOLO_MARKER="$YOLO_RUN_DIR/$SESSION_MARKER_NAME"
     : > "$YOLO_MARKER" 2>/dev/null || YOLO_MARKER=""
   fi
   trap cleanup EXIT INT TERM
   set_yolo_mode true
 fi
 
-if [[ "$TARGET" == "agy" ]]; then
+if [[ "$TARGET" == "agy" && "$CAN_TRACK_SESSIONS" -eq 1 ]]; then
   if mkdir -p "$AGY_RUN_DIR" 2>/dev/null; then
     if [ ! -f "$AGY_RUN_DIR/prior" ]; then
       prior_settings="unset"
@@ -496,7 +502,7 @@ if [[ "$TARGET" == "agy" ]]; then
       fi
       printf '%s\n%s\n' "$prior_settings" "$prior_config" > "$AGY_RUN_DIR/prior" 2>/dev/null || true
     fi
-    AGY_MARKER="$AGY_RUN_DIR/$$"
+    AGY_MARKER="$AGY_RUN_DIR/$SESSION_MARKER_NAME"
     : > "$AGY_MARKER" 2>/dev/null || AGY_MARKER=""
   fi
   trap cleanup EXIT INT TERM
@@ -1285,6 +1291,7 @@ BWRAP_ARGS+=(
   --chdir "$PROJECT_DIR"
   --setenv PS1 "sandbox$ "
   --setenv AGENT_SAFE 1
+  --setenv AGENT_SAFE_HOST_PID "$$"
   "${IDE_ENV_ARGS[@]}"
 )
 
