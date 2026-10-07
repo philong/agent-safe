@@ -14,7 +14,7 @@ AI coding agents can write or delete files anywhere on your system, including ou
 - Agent configuration and session state directories (`~/.pi`, `~/.gemini`, `~/.claude`, `~/.codex`, `~/.copilot`, `~/.aider`, `~/.config/opencode`) are **writable**.
 - Package manager and compiler caches (Rust, Go, Node, Python, JVM, .NET, etc.) are **writable** so builds and dependency downloads persist without polluting outside directories.
 - Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, and runtime `$XDG_RUNTIME_DIR/gnupg`, `keyring`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK`, `~/.ssh/known_hosts`, `~/.ssh/config`, and `~/.ssh/*.pub` public keys available for git operations and ssh-agent identity matching).
-- Container engine sockets (`docker.sock`, `podman.sock`, `containerd.sock`) are **masked with `/dev/null`** and `DOCKER_HOST`/`CONTAINER_HOST` are unset. Because connecting to a UNIX domain socket ignores read-only filesystem mounts, an unmasked socket allows an agent to command the host daemon to spawn containers mounting the host filesystem read-write, completely bypassing sandbox write protections and secret masking.
+- Container engine sockets (`docker.sock`, `podman.sock`, `containerd.sock`) are **masked with `/dev/null`** and `DOCKER_HOST`/`CONTAINER_HOST` are unset (override with `AGENT_SAFE_ALLOW_DOCKER=1`). Because connecting to a UNIX domain socket ignores read-only filesystem mounts, an unmasked socket allows an agent to command the host daemon to spawn containers mounting the host filesystem read-write, completely bypassing sandbox write protections and secret masking.
 - D-Bus session and system bus sockets (`/run/user/$UID/bus`, `/run/dbus/system_bus_socket`), systemd private sockets, and audio sockets (`pipewire-0`, `pulse/native`) are **masked with `/dev/null`** and `DBUS_SESSION_BUS_ADDRESS` is unset, preventing unconfined host command execution via `systemd-run --user` and microphone recording.
 - Build tool wrapper distributions (`~/.gradle/wrapper`, `~/.m2/wrapper`) are left **read-only** to prevent poisoning wrapper scripts (`bin/gradle`, `bin/mvn`) that run on the host; `~/.gradle/daemon` is isolated on **tmpfs** to prevent connecting to or hijacking host Gradle daemons.
 - `/tmp` and `/dev/shm` are mounted as **tmpfs** (enabling shared memory for Playwright, Chromium, and test runners).
@@ -144,19 +144,27 @@ through to it untouched, so `agent-safe claude --help` shows Claude's help and
 | `--dry-run` | Print sandbox mounts and `bwrap` command without executing |
 | `--no-mask` | Disable secret masking (allows reading `~/.aws`, `~/.kube`, etc.) |
 
-### Extra Writable Paths (Environment Variable)
+## Environment Variables
 
-You can also use an environment variable for extra write mounts:
+All command-line flags and sandbox policies can also be configured via environment variables:
 
-```bash
-AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>
-```
+| Variable | Description | Default |
+|---|---|---|
+| `AGENT_SAFE_WRITE` | Colon-separated list of extra directories to mount as writable (e.g. `AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>`). Equivalent to `-w` / `--write`. | *(none)* |
+| `AGENT_SAFE_ALLOW_DOCKER` | Set to `1` to allow access to container engine sockets (`docker.sock`, `podman.sock`, `containerd.sock`) and preserve `DOCKER_HOST` / `CONTAINER_HOST`. | `0` (masked) |
+| `AGENT_SAFE_ALLOW_UNSANDBOXED` | Set to `1` to run directly unsandboxed if Bubblewrap is missing or cannot create a sandbox (e.g. in a nested container or with unprivileged user namespaces disabled). | `0` (refuse) |
+| `AGENT_SAFE_NO_MASK` | Set to `1` to disable host credential masking (`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.). Equivalent to `--no-mask`. | `0` (masked) |
+| `AGENT_SAFE_OFFLINE` | Set to `1` to run with network isolation (`--unshare-net`). Equivalent to `--offline` / `--no-net`. | `0` (network enabled) |
+
+### Runtime Variables
+
+- `AGENT_SAFE`: Set to `1` automatically inside the sandbox by `agent-safe`. Nested invocations check this variable to run directly without re-sandboxing.
 
 ## Notes
 
-- Network access is enabled by default (use `--offline` to disable).
+- Network access is enabled by default (use `--offline` or `AGENT_SAFE_OFFLINE=1` to disable).
 - `agent-safe` warns on start when run with `$HOME` (or `/`, or any parent of `$HOME`) as the project directory, since that makes your whole home writable.
-- User-provided write mounts (`-w` and `AGENT_SAFE_WRITE`) have the last say and are applied after masks and protections, allowing them to re-expose paths (such as `-w ~/.ssh` or `-w ~`). Default project and cache binds are applied before masks, so running in `$HOME` without `-w` still leaves host secrets masked (or use `--no-mask` to opt out of secret masking entirely).
+- User-provided write mounts (`-w` and `AGENT_SAFE_WRITE`) have the last say and are applied after masks and protections, allowing them to re-expose paths (such as `-w ~/.ssh` or `-w ~`). Default project and cache binds are applied before masks, so running in `$HOME` without `-w` still leaves host secrets masked (or use `--no-mask` / `AGENT_SAFE_NO_MASK=1` to opt out of secret masking entirely).
 - If Bubblewrap is missing or cannot create a sandbox (inside a container, or unprivileged user namespaces disabled), `agent-safe` refuses to run, since every target runs with its permission prompts off. Set `AGENT_SAFE_ALLOW_UNSANDBOXED=1` to run it directly anyway. Inside an `agent-safe` sandbox (`AGENT_SAFE=1`), nested invocations run directly, as they are already sandboxed.
 - Do not install the `pi-sandbox` extension when using `agent-safe`, as it conflicts.
 

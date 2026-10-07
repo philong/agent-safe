@@ -2,7 +2,10 @@
 set -euo pipefail
 
 usage() {
-  cat <<'EOF' >&2
+  local code="${1:-1}"
+  local out=2
+  [[ "$code" -eq 0 ]] && out=1
+  cat <<'EOF' >&$out
 usage: agent-safe [options] <target|command> [args...]
        agent-safe [project-dir]           (when invoked as pi-web-safe)
 
@@ -43,8 +46,16 @@ Options:
   --dry-run          Print sandbox configuration and bwrap command without executing
   --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
   -h, --help         Show this help message
+
+Environment Variables:
+  AGENT_SAFE_WRITE              Colon-separated paths to mount writable inside sandbox (like -w)
+  AGENT_SAFE_ALLOW_DOCKER       Set to 1 to allow container engine sockets (Docker, Podman)
+  AGENT_SAFE_ALLOW_UNSANDBOXED  Set to 1 to run unsandboxed if bubblewrap is unavailable
+  AGENT_SAFE_NO_MASK            Set to 1 to disable secret masking (like --no-mask)
+  AGENT_SAFE_OFFLINE            Set to 1 to run with network isolation (like --offline)
+  AGENT_SAFE                    Set to 1 inside sandbox; tells nested runs to run directly
 EOF
-  exit 1
+  exit "$code"
 }
 
 PROG="$(basename "$0")"
@@ -85,7 +96,7 @@ DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
-      usage
+      usage 0
       ;;
     --offline|--no-net)
       OFFLINE=1
