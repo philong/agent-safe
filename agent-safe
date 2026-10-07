@@ -550,6 +550,8 @@ CACHE_DIRS=(
   "$HOME/.cache/opencode"
   # Claude Code's own shell snapshots and MCP logs.
   "$HOME/.cache/claude-cli-nodejs"
+  # Copilot CLI's user cache and its lock file.
+  "$HOME/.cache/copilot"
 
   # JVM (repository and caches; wrapper dists left read-only to prevent executable poisoning)
   "$HOME/.m2/repository"
@@ -561,6 +563,7 @@ CACHE_DIRS=(
   "$HOME/.gradle/android"
   "$HOME/.gradle/notifications"
   "$HOME/.gradle/build-scans"
+  "$HOME/.gradle/build-scan-data"
   "$HOME/.gradle/develocity"
   "$HOME/.gradle/enterprise"
   "$HOME/.ivy2/cache"
@@ -579,7 +582,9 @@ CACHE_DIRS=(
 
   # Go
   "$HOME/go/pkg/mod"
+  "$HOME/go/pkg/sumdb"
   "$HOME/.cache/go-build"
+  "$HOME/.cache/goimports"
 
   # Node & Web
   "$HOME/.npm/_cacache"
@@ -662,6 +667,9 @@ CACHE_FILES=(
 #                        interpreters and shims that are on your PATH
 #   ~/.gradle/wrapper ~/.m2/wrapper
 #                        downloaded wrappers containing shell scripts/executables
+#   ~/.npm/_npx          packages npx runs on the host; `npx <new-package>`
+#                        therefore fails inside the sandbox, cached ones still run
+#   ~/.npm/_prebuilds    prebuilt native addons (.node), loaded outside the sandbox
 # Installing a toolchain or a global CLI therefore has to happen outside agent-safe.
 
 # User-provided extra write mounts from CLI flags (-w / --write) and AGENT_SAFE_WRITE.
