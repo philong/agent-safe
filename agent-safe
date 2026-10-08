@@ -814,7 +814,7 @@ git_pin() {
 
 # Protects one gitdir, resolved, and every gitdir it holds.
 protect_gitdir() {
-  local gitdir="$1" wt_config=false wt_dir root common
+  local gitdir="$1" wt_config=false wt_dir root common raw
   case ":$git_protected:" in *":$gitdir:"*) return 0 ;; esac
   git_protected="$git_protected:$gitdir"
   git_resolved "$gitdir" || return 0
@@ -827,17 +827,20 @@ protect_gitdir() {
     git_ro_paths+=("$gitdir/commondir")
     # One that points elsewhere makes this a linked worktree's gitdir, which its
     # common dir takes care of; one pointing back here is ours, from an earlier run.
-    common="$(head -n 1 "$gitdir/commondir" 2>/dev/null)"
-    common="$(cd "$gitdir" && realpath -q -- "${common%$'\r'}")" || return 0
+    raw="$(head -n 1 "$gitdir/commondir" 2>/dev/null)"
+    common="$(cd "$gitdir" && realpath -q -- "${raw%$'\r'}")" || return 0
     [ "$common" = "$gitdir" ] || return 0
+    # Earlier runs wrote a bare ".", which Spotless's JGit wrapper rejects.
+    [ "$raw" != . ] || printf './\n' > "$gitdir/commondir" 2>/dev/null || true
   fi
   # git reads $GIT_DIR/commondir in ANY gitdir, not just a linked worktree's, and
   # takes config, hooks and everything else from the directory it names. An agent
   # writing one into .git would bypass every read-only bind here, so give each
   # common dir a commondir of its own, pointing at itself, and bind it read-only.
-  # An empty or unreadable commondir makes git die, so it has to hold ".".
+  # An empty or unreadable commondir makes git die, so it has to hold "./": a
+  # bare "." is a one-byte path, which Spotless (GitWorkarounds) treats as empty.
   [ -e "$gitdir/commondir" ] || [ -L "$gitdir/commondir" ] ||
-    printf '.\n' > "$gitdir/commondir" 2>/dev/null || true
+    printf './\n' > "$gitdir/commondir" 2>/dev/null || true
   mkdir -p "$gitdir/hooks" 2>/dev/null || true
   git_ro_paths+=("$gitdir/commondir" "$gitdir/config" "$gitdir/config.worktree" "$gitdir/hooks")
   # A linked worktree's own gitdir holds a second config file, and core.hooksPath
