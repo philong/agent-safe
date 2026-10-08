@@ -596,6 +596,13 @@ CACHE_DIRS=(
   "${XDG_CACHE_HOME:-$HOME/.cache}/pnpm"
   "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm/store"
   "${XDG_STATE_HOME:-$HOME/.local/state}/pnpm"
+  # pnpm 10+ takes these locks on every command, even read-only ones.
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pnpm-store-operation-locks-${UID:-$(id -u)}"
+  "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pnpm-dir-locks-${UID:-$(id -u)}"
+  # Lock dir for the pnpm versions pinned by "packageManager". Only tmp/: the
+  # rest of package-manager-store holds pnpm builds that run outside the
+  # sandbox, so a pinned version not yet downloaded must be fetched outside.
+  "${XDG_DATA_HOME:-$HOME/.local/share}"/pnpm/package-manager-store/v*/tmp
   "$HOME/.cache/yarn"
   "$HOME/.yarn/berry/cache"
   "$HOME/.bun/install/cache"
