@@ -19,7 +19,7 @@ else read-only.
 
 Targets / Modes:
   pi               Run Pi CLI in yolo mode
-  pi-web           Run Pi Web in yolo mode (pnpx @agegr/pi-web@latest --hostname 0.0.0.0)
+  pi-web           Run Pi Web in yolo mode (pnx @agegr/pi-web@latest --hostname 0.0.0.0)
   agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
   claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
   codex            Run Codex CLI (codex --dangerously-bypass-approvals-and-sandbox)
@@ -230,9 +230,9 @@ case "$TARGET" in
     esac
     ;;
   pi-web)
-    command -v pnpx >/dev/null 2>&1 || { echo "agent-safe: 'pnpx' not found in PATH" >&2; exit 1; }
+    command -v pnx >/dev/null 2>&1 || { echo "agent-safe: 'pnx' not found in PATH" >&2; exit 1; }
     ENABLE_PI_YOLO=true
-    RUN_CMD=(pnpx --allow-build=@google/genai --allow-build=esbuild --allow-build=node-pty --allow-build=protobufjs "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
+    RUN_CMD=(pnx --allow-build=@google/genai --allow-build=esbuild --allow-build=node-pty --allow-build=protobufjs "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
     ;;
   agy)
     command -v agy >/dev/null 2>&1 || { echo "agent-safe: 'agy' not found in PATH" >&2; exit 1; }

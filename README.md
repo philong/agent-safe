@@ -68,7 +68,7 @@ pi-safe
 ```
 
 ### 2. Pi Web (`pi-web`)
-Runs `pnpx @agegr/pi-web@latest --hostname 0.0.0.0` in yolo mode:
+Runs `pnx @agegr/pi-web@latest --hostname 0.0.0.0` in yolo mode:
 ```bash
 pi-web-safe [optional-project-dir]
 # or: agent-safe pi-web [optional-project-dir]
