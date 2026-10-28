@@ -699,6 +699,10 @@ CACHE_DIRS=(
   # Version manager download caches (not the installed toolchains)
   "$HOME/.cache/mise"
 
+  # agent-browser's default screenshot and download location. Only tmp/:
+  # browsers/ holds the Chrome it launches on the host too.
+  "$HOME/.agent-browser/tmp"
+
   # Regenerated on demand by headless browsers, the JVM and matplotlib; a
   # read-only one means a slow rebuild on every single run.
   "$HOME/.cache/fontconfig"
@@ -1227,6 +1231,18 @@ fi
 if [[ -d "$HOME/.gradle" ]]; then
   mkdir -p "$HOME/.gradle/daemon" 2>/dev/null || true
   BWRAP_ARGS+=(--tmpfs "$HOME/.gradle/daemon")
+fi
+
+# agent-browser's daemon listens on a socket in this directory, which is
+# read-only in the sandbox, so the daemon cannot start. A tmpfs gives the
+# sandbox its own and hides the host's: connecting to a socket ignores
+# read-only mounts, and a host daemon's browser reads file:// URLs (~/.ssh
+# included) with no masking. This only closes the command socket. The browser
+# also serves CDP on a loopback TCP port, reachable unless --offline.
+AGENT_BROWSER_SOCKET_DIR="${AGENT_BROWSER_SOCKET_DIR:-${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/agent-browser}"
+if command -v agent-browser >/dev/null 2>&1 || [[ -d "$HOME/.agent-browser" || -d "$AGENT_BROWSER_SOCKET_DIR" ]]; then
+  mkdir -p "$AGENT_BROWSER_SOCKET_DIR" 2>/dev/null || true
+  [[ -d "$AGENT_BROWSER_SOCKET_DIR" ]] && BWRAP_ARGS+=(--tmpfs "$AGENT_BROWSER_SOCKET_DIR")
 fi
 
 masked_socks=()
