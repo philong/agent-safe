@@ -15,7 +15,7 @@ AI coding agents can write or delete files anywhere on your system, including ou
 - Package manager and compiler caches (Rust, Go, Node, Python, JVM, .NET, etc.) are **writable** so builds and dependency downloads persist without polluting outside directories.
 - Host credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, and runtime `$XDG_RUNTIME_DIR/gnupg`, `keyring`) are **masked with tmpfs** to prevent unauthorized access (while keeping `$SSH_AUTH_SOCK`, `~/.ssh/known_hosts`, `~/.ssh/config`, and `~/.ssh/*.pub` public keys available for git operations and ssh-agent identity matching).
 - Container engine sockets (`docker.sock`, `podman.sock`, `containerd.sock`) are **masked with `/dev/null`** and `DOCKER_HOST`/`CONTAINER_HOST` are unset (override with `--allow-docker` or `AGENT_SAFE_ALLOW_DOCKER=1`). Because connecting to a UNIX domain socket ignores read-only filesystem mounts, an unmasked socket allows an agent to command the host daemon to spawn containers mounting the host filesystem read-write, completely bypassing sandbox write protections and secret masking.
-- D-Bus session and system bus sockets (`/run/user/$UID/bus`, `/run/dbus/system_bus_socket`), systemd private sockets, and audio sockets (`pipewire-0`, `pulse/native`) are **masked with `/dev/null`** and `DBUS_SESSION_BUS_ADDRESS` is unset, preventing unconfined host command execution via `systemd-run --user` and microphone recording. Pass `--allow-systemd` (or `AGENT_SAFE_ALLOW_SYSTEMD=1`) to unmask the user manager's private socket (`$XDG_RUNTIME_DIR/systemd/private`) so `systemctl --user` works; this hands the agent `systemd-run --user`, i.e. unsandboxed host execution.
+- D-Bus session and system bus sockets (`/run/user/$UID/bus`, `/run/dbus/system_bus_socket`), systemd private sockets, and audio sockets (`pipewire-0`, `pulse/native`) are **masked with `/dev/null`** and `DBUS_SESSION_BUS_ADDRESS` is unset, preventing unconfined host command execution via `systemd-run --user` and microphone recording. Pass `--allow-systemd` (or `AGENT_SAFE_ALLOW_SYSTEMD=1`) to unmask the user manager's private socket (`$XDG_RUNTIME_DIR/systemd/private`) so `systemctl --user` works. This hands the agent `systemd-run --user`, i.e. unsandboxed host execution: anything started that way can write anywhere, read masked secrets, use the session bus and reach the network even with `--offline`. Both escape hatches print a warning on stderr when enabled.
 - Build tool wrapper distributions (`~/.gradle/wrapper`, `~/.m2/wrapper`) are left **read-only** to prevent poisoning wrapper scripts (`bin/gradle`, `bin/mvn`) that run on the host; `~/.gradle/daemon` is isolated on **tmpfs** to prevent connecting to or hijacking host Gradle daemons.
 - `/tmp` and `/dev/shm` are mounted as **tmpfs** (enabling shared memory for Playwright, Chromium, and test runners).
 - The sandbox gets its own **PID namespace** (`--unshare-pid`), so an agent running `pkill`/`killall` cannot reach host processes, and it is torn down with the launching shell (`--die-with-parent`) so build daemons do not outlive the session.
@@ -143,8 +143,8 @@ through to it untouched, so `agent-safe claude --help` shows Claude's help and
 | `--offline`, `--no-net` | Run with network isolation (`--unshare-net`) |
 | `--dry-run` | Print sandbox mounts and `bwrap` command without executing |
 | `--no-mask` | Disable secret masking (allows reading `~/.aws`, `~/.kube`, etc.) |
-| `--allow-docker` | Allow container engine sockets (see `AGENT_SAFE_ALLOW_DOCKER`) |
-| `--allow-systemd` | Allow the user systemd manager (see `AGENT_SAFE_ALLOW_SYSTEMD`) |
+| `--allow-docker` | Allow container engine sockets (see `AGENT_SAFE_ALLOW_DOCKER`). Grants unsandboxed host execution. |
+| `--allow-systemd` | Allow the user systemd manager (see `AGENT_SAFE_ALLOW_SYSTEMD`). Grants unsandboxed host execution. |
 
 ## Environment Variables
 
@@ -154,7 +154,7 @@ All command-line flags and sandbox policies can also be configured via environme
 |---|---|---|
 | `AGENT_SAFE_WRITE` | Colon-separated list of extra directories to mount as writable (e.g. `AGENT_SAFE_WRITE=/path/one:/path/two agent-safe <target>`). Equivalent to `-w` / `--write`. | *(none)* |
 | `AGENT_SAFE_ALLOW_DOCKER` | Set to `1` to allow access to container engine sockets (`docker.sock`, `podman.sock`, `containerd.sock`) and preserve `DOCKER_HOST` / `CONTAINER_HOST`. | `0` (masked) |
-| `AGENT_SAFE_ALLOW_SYSTEMD` | Set to `1` to allow access to the user systemd manager (`$XDG_RUNTIME_DIR/systemd/private`) so `systemctl --user` / `systemd-run --user` work. Grants unsandboxed host execution. The D-Bus session bus stays masked. | `0` (masked) |
+| `AGENT_SAFE_ALLOW_SYSTEMD` | Set to `1` to allow access to the user systemd manager (`$XDG_RUNTIME_DIR/systemd/private`) so `systemctl --user` / `systemd-run --user` work. Grants unsandboxed host execution: `systemd-run --user` units bypass every sandbox restriction, including secret masking and `--offline`. | `0` (masked) |
 | `AGENT_SAFE_ALLOW_UNSANDBOXED` | Set to `1` to run directly unsandboxed if Bubblewrap is missing or cannot create a sandbox (e.g. in a nested container or with unprivileged user namespaces disabled). | `0` (refuse) |
 | `AGENT_SAFE_NO_MASK` | Set to `1` to disable host credential masking (`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.). Equivalent to `--no-mask`. | `0` (masked) |
 | `AGENT_SAFE_OFFLINE` | Set to `1` to run with network isolation (`--unshare-net`). Equivalent to `--offline` / `--no-net`. | `0` (network enabled) |

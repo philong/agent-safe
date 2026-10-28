@@ -45,8 +45,8 @@ Options:
   --offline, --no-net Run with network isolation (disable network access)
   --dry-run          Print sandbox configuration and bwrap command without executing
   --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
-  --allow-docker     Allow container engine sockets (Docker, Podman)
-  --allow-systemd    Allow the user systemd manager (systemctl --user)
+  --allow-docker     Allow container engine sockets (Docker, Podman); unsandboxed host exec
+  --allow-systemd    Allow the user systemd manager (systemctl --user); unsandboxed host exec
   -h, --help         Show this help message
 
 Environment Variables:
@@ -187,6 +187,20 @@ PROJECT_DIR="$project_dir_real"
 home_real="$(realpath -q -- "${HOME:?agent-safe: HOME is not set}")" || home_real="$HOME"
 if [ "$PROJECT_DIR" = / ] || [ "${home_real#"$PROJECT_DIR"/}" != "$home_real" ] || [ "$PROJECT_DIR" = "$home_real" ]; then
   echo "agent-safe: warning: making $PROJECT_DIR writable; it is your home directory or one of its parents" >&2
+fi
+
+# Both hand the agent a host daemon that starts processes outside the sandbox:
+# no write protection, no secret masking, and network access even with --offline.
+if [[ "${AGENT_SAFE:-0}" != "1" ]]; then
+  allowed=""
+  [[ "$ALLOW_DOCKER" -eq 1 ]] && allowed="docker"
+  [[ "$ALLOW_SYSTEMD" -eq 1 ]] && allowed="${allowed:+$allowed and }systemd"
+  if [[ -n "$allowed" ]]; then
+    echo "agent-safe: warning: $allowed allowed; the agent can run unsandboxed commands on the host" >&2
+    if [[ "$OFFLINE" -eq 1 ]]; then
+      echo "agent-safe: warning: --offline does not isolate the network of commands started through $allowed" >&2
+    fi
+  fi
 fi
 
 can_sandbox() {
@@ -1274,7 +1288,8 @@ fi
 
 # D-Bus, systemd private IPC, and audio daemon sockets allow an agent to escape
 # the sandbox by spawning host units via `systemd-run --user` (or org.freedesktop.systemd1),
-# access desktop secret services, or record host microphone audio.
+# access desktop secret services, or record host microphone audio. All are always
+# masked except the user manager's private socket, which --allow-systemd opens.
 HOST_IPC_SOCKS=(
   "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/bus"
   "/run/systemd/private"
@@ -1283,7 +1298,8 @@ HOST_IPC_SOCKS=(
   "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pulse/native"
 )
 # systemctl --user talks to the user manager over its private socket first, so
-# --allow-systemd unmasks only that one; the session bus stays masked.
+# that one is enough. Masking the session bus then only keeps it out of reach of
+# the agent itself: units started through `systemd-run --user` are unsandboxed.
 if [[ "$ALLOW_SYSTEMD" -eq 0 ]]; then
   HOST_IPC_SOCKS+=("${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/systemd/private")
 fi
