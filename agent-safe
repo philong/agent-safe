@@ -47,12 +47,14 @@ Options:
   --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
   --allow-docker     Allow container engine sockets (Docker, Podman); unsandboxed host exec
   --allow-systemd    Allow the user systemd manager (systemctl --user); unsandboxed host exec
+  --allow-host-pids  Share the host PID namespace (see and signal host processes)
   -h, --help         Show this help message
 
 Environment Variables:
   AGENT_SAFE_WRITE              Colon-separated paths to mount writable inside sandbox (like -w)
   AGENT_SAFE_ALLOW_DOCKER       Set to 1 to allow container engine sockets (like --allow-docker)
   AGENT_SAFE_ALLOW_SYSTEMD      Set to 1 to allow the user systemd manager (like --allow-systemd)
+  AGENT_SAFE_ALLOW_HOST_PIDS    Set to 1 to share the host PID namespace (like --allow-host-pids)
   AGENT_SAFE_ALLOW_UNSANDBOXED  Set to 1 to run unsandboxed if bubblewrap is unavailable
   AGENT_SAFE_NO_MASK            Set to 1 to disable secret masking (like --no-mask)
   AGENT_SAFE_OFFLINE            Set to 1 to run with network isolation (like --offline)
@@ -101,6 +103,11 @@ if [[ "${AGENT_SAFE_ALLOW_SYSTEMD:-0}" == "1" ]]; then
   ALLOW_SYSTEMD=1
 fi
 
+ALLOW_HOST_PIDS=0
+if [[ "${AGENT_SAFE_ALLOW_HOST_PIDS:-0}" == "1" ]]; then
+  ALLOW_HOST_PIDS=1
+fi
+
 PROJECT_DIR="$PWD"
 EXTRA_WRITE_CLI=()
 DRY_RUN=0
@@ -139,6 +146,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-systemd)
       ALLOW_SYSTEMD=1
+      shift
+      ;;
+    --allow-host-pids)
+      ALLOW_HOST_PIDS=1
       shift
       ;;
     *)
@@ -200,6 +211,9 @@ if [[ "${AGENT_SAFE:-0}" != "1" ]]; then
     if [[ "$OFFLINE" -eq 1 ]]; then
       echo "agent-safe: warning: --offline does not isolate the network of commands started through $allowed" >&2
     fi
+  fi
+  if [[ "$ALLOW_HOST_PIDS" -eq 1 ]]; then
+    echo "agent-safe: warning: host PIDs shared; the agent can see and kill your other processes, and daemons it starts outlive the session" >&2
   fi
 fi
 
@@ -1172,16 +1186,24 @@ BWRAP_ARGS=(
   --dev /dev
   --tmpfs /dev/shm
   --tmpfs /tmp
-  # A PID namespace keeps the agent's process management inside the sandbox: a
-  # stray `pkill -f node` or `killall java` can no longer reach your editor,
-  # your daemons, or another agent session. --proc is required to go with it,
-  # or /proc would still show the host's processes.
-  --proc /proc
-  --unshare-pid
   # Tear the sandbox down with the launching shell, so build daemons started
   # inside it (gradle, pnpm, node watchers) do not outlive the session.
   --die-with-parent
 )
+
+# A PID namespace keeps the agent's process management inside the sandbox: a
+# stray `pkill -f node` or `killall java` can no longer reach your editor,
+# your daemons, or another agent session. --proc is required to go with it,
+# or /proc would still show the host's processes.
+if [[ "$ALLOW_HOST_PIDS" -eq 0 ]]; then
+  BWRAP_ARGS+=(--proc /proc --unshare-pid)
+else
+  # A fresh procfs needs a PID namespace the sandbox owns, so bind the host's
+  # instead: the recursive bind of / alone would leave it read-only, and tools
+  # write /proc/self/oom_score_adj. Host processes' environ, fd and root stay
+  # unreadable, as the sandbox's user namespace holds no ptrace rights over them.
+  BWRAP_ARGS+=(--bind /proc /proc)
+fi
 
 # Default cache binds and project dir go after --tmpfs /tmp, which would otherwise
 # silently shadow any bind resolving under /tmp, and before masks so default
