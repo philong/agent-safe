@@ -45,12 +45,14 @@ Options:
   --offline, --no-net Run with network isolation (disable network access)
   --dry-run          Print sandbox configuration and bwrap command without executing
   --no-mask          Do not mask host secrets (~/.ssh, ~/.aws, etc.)
+  --allow-docker     Allow container engine sockets (Docker, Podman)
+  --allow-systemd    Allow the user systemd manager (systemctl --user)
   -h, --help         Show this help message
 
 Environment Variables:
   AGENT_SAFE_WRITE              Colon-separated paths to mount writable inside sandbox (like -w)
-  AGENT_SAFE_ALLOW_DOCKER       Set to 1 to allow container engine sockets (Docker, Podman)
-  AGENT_SAFE_ALLOW_SYSTEMD      Set to 1 to allow the user systemd manager (systemctl --user)
+  AGENT_SAFE_ALLOW_DOCKER       Set to 1 to allow container engine sockets (like --allow-docker)
+  AGENT_SAFE_ALLOW_SYSTEMD      Set to 1 to allow the user systemd manager (like --allow-systemd)
   AGENT_SAFE_ALLOW_UNSANDBOXED  Set to 1 to run unsandboxed if bubblewrap is unavailable
   AGENT_SAFE_NO_MASK            Set to 1 to disable secret masking (like --no-mask)
   AGENT_SAFE_OFFLINE            Set to 1 to run with network isolation (like --offline)
@@ -89,6 +91,16 @@ if [[ "${AGENT_SAFE_OFFLINE:-0}" == "1" ]]; then
   OFFLINE=1
 fi
 
+ALLOW_DOCKER=0
+if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" == "1" ]]; then
+  ALLOW_DOCKER=1
+fi
+
+ALLOW_SYSTEMD=0
+if [[ "${AGENT_SAFE_ALLOW_SYSTEMD:-0}" == "1" ]]; then
+  ALLOW_SYSTEMD=1
+fi
+
 PROJECT_DIR="$PWD"
 EXTRA_WRITE_CLI=()
 DRY_RUN=0
@@ -119,6 +131,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-mask)
       MASK_SECRETS=0
+      shift
+      ;;
+    --allow-docker)
+      ALLOW_DOCKER=1
+      shift
+      ;;
+    --allow-systemd)
+      ALLOW_SYSTEMD=1
       shift
       ;;
     *)
@@ -1224,7 +1244,7 @@ mask_socket() {
 # Container engine sockets allow an agent to control a host daemon (usually running
 # as root or with host user access), mount host filesystems read-write, and bypass
 # the sandbox completely. Mask them with /dev/null (or tmpfs) and strip environment pointers.
-if [[ "${AGENT_SAFE_ALLOW_DOCKER:-0}" != "1" ]]; then
+if [[ "$ALLOW_DOCKER" -eq 0 ]]; then
   CONTAINER_SOCKS=(
     "/run/docker.sock"
     "/var/run/docker.sock"
@@ -1263,8 +1283,8 @@ HOST_IPC_SOCKS=(
   "${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/pulse/native"
 )
 # systemctl --user talks to the user manager over its private socket first, so
-# AGENT_SAFE_ALLOW_SYSTEMD=1 unmasks only that one; the session bus stays masked.
-if [[ "${AGENT_SAFE_ALLOW_SYSTEMD:-0}" != "1" ]]; then
+# --allow-systemd unmasks only that one; the session bus stays masked.
+if [[ "$ALLOW_SYSTEMD" -eq 0 ]]; then
   HOST_IPC_SOCKS+=("${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}/systemd/private")
 fi
 for sock in "${HOST_IPC_SOCKS[@]}"; do
