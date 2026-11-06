@@ -1182,9 +1182,6 @@ if [ "${#IDE_LOCK_SNAPSHOTS[@]}" -gt 0 ]; then
   trap cleanup EXIT INT TERM
 fi
 
-# No bind is needed for $SSH_AUTH_SOCK: connecting to a unix socket works
-# through the read-only bind of /, so a forwarded agent is already reachable.
-
 BWRAP_ARGS=(
   --ro-bind / /
   --dev /dev
@@ -1382,6 +1379,19 @@ if [[ "$MASK_SECRETS" -eq 1 ]]; then
       BWRAP_ARGS+=(--ro-bind "$pubkey" "$pubkey")
     fi
   done
+fi
+
+# Keep the ssh agent reachable. Connecting to a unix socket works through the
+# read-only bind of /, but only while nothing mounted later hides it, and the
+# usual spots are hidden: `ssh -A` forwards into /tmp/ssh-*/ (under the /tmp
+# tmpfs), gpg-agent and gnome-keyring serve it from $XDG_RUNTIME_DIR/gnupg and
+# keyring, and some setups put it in ~/.ssh, all of which are masked. Bind the
+# socket itself after the masks; read-only is enough to connect.
+if [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
+  ssh_auth_sock_real="$(realpath -q "$SSH_AUTH_SOCK" 2>/dev/null)" || ssh_auth_sock_real=""
+  if [[ -n "$ssh_auth_sock_real" && -S "$ssh_auth_sock_real" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$ssh_auth_sock_real" "$SSH_AUTH_SOCK")
+  fi
 fi
 
 # Network isolation
