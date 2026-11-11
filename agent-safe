@@ -1387,10 +1387,100 @@ fi
 # tmpfs), gpg-agent and gnome-keyring serve it from $XDG_RUNTIME_DIR/gnupg and
 # keyring, and some setups put it in ~/.ssh, all of which are masked. Bind the
 # socket itself after the masks; read-only is enough to connect.
-if [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
-  ssh_auth_sock_real="$(realpath -q "$SSH_AUTH_SOCK" 2>/dev/null)" || ssh_auth_sock_real=""
-  if [[ -n "$ssh_auth_sock_real" && -S "$ssh_auth_sock_real" ]]; then
-    BWRAP_ARGS+=(--ro-bind "$ssh_auth_sock_real" "$SSH_AUTH_SOCK")
+#
+# With ~/.ssh private keys masked, SSH inside the sandbox authenticates only
+# through an agent. A login shell that never imported the desktop session's
+# environment has no $SSH_AUTH_SOCK, so ssh on the host falls back to the key
+# files while the same command in the sandbox fails with "Permission denied
+# (publickey)". Find the agent in that case and pass its path in.
+
+# Exit 0 when the agent at $1 holds keys, 1 when it is empty, 2 when unreachable.
+ssh_agent_status() {
+  if ! command -v ssh-add >/dev/null 2>&1; then
+    [[ -S "$1" ]] && return 0 || return 2
+  fi
+  local rc=0
+  SSH_AUTH_SOCK="$1" ssh-add -l >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -le 2 ]] || rc=2
+  return "$rc"
+}
+
+# Print the agent socket to use and exit with its ssh_agent_status. A live
+# $SSH_AUTH_SOCK is always kept, even when empty: it is the user's choice.
+find_ssh_agent() {
+  local runtime="${XDG_RUNTIME_DIR:-/run/user/${UID:-$(id -u)}}"
+  local sock rc fallback="" fallback_rc=2
+  if [[ -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
+    rc=0
+    ssh_agent_status "$SSH_AUTH_SOCK" || rc=$?
+    echo "$SSH_AUTH_SOCK"
+    return "$rc"
+  fi
+  local candidates=()
+  if command -v systemctl >/dev/null 2>&1; then
+    sock="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^SSH_AUTH_SOCK=//p')" || true
+    [[ -n "$sock" ]] && candidates+=("$sock")
+  fi
+  candidates+=(
+    "$runtime/gcr/ssh"
+    "$runtime/keyring/ssh"
+    "$runtime/ssh-agent.socket"
+    "$runtime/openssh_agent"
+    "$runtime/gnupg/S.gpg-agent.ssh"
+  )
+  for sock in "${candidates[@]}"; do
+    [[ -S "$sock" ]] || continue
+    rc=0
+    ssh_agent_status "$sock" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      echo "$sock"
+      return 0
+    fi
+    if [[ "$rc" -eq 1 && -z "$fallback" ]]; then
+      fallback="$sock"
+      fallback_rc=1
+    fi
+  done
+  [[ -n "$fallback" ]] && echo "$fallback"
+  return "$fallback_rc"
+}
+
+ssh_rc=0
+ssh_sock=""
+ssh_real=""
+if [[ "$MASK_SECRETS" -eq 1 ]]; then
+  ssh_sock="$(find_ssh_agent)" || ssh_rc=$?
+elif [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
+  ssh_sock="$SSH_AUTH_SOCK"
+fi
+if [[ -n "$ssh_sock" ]]; then
+  # Pass the resolved path: a symlink such as ~/.ssh/agent.sock disappears
+  # under the ~/.ssh mask, so bind the real socket onto itself instead.
+  ssh_real="$(realpath -q "$ssh_sock" 2>/dev/null)" || ssh_real=""
+  if [[ -n "$ssh_real" && -S "$ssh_real" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$ssh_real" "$ssh_real")
+    if [[ "$ssh_real" != "${SSH_AUTH_SOCK:-}" ]]; then
+      BWRAP_ARGS+=(--setenv SSH_AUTH_SOCK "$ssh_real")
+    fi
+    if [[ "$MASK_SECRETS" -eq 1 && ( -z "${SSH_AUTH_SOCK:-}" || ! -S "$SSH_AUTH_SOCK" ) ]]; then
+      echo "agent-safe: SSH_AUTH_SOCK is not set; using the ssh-agent at $ssh_real" >&2
+    fi
+  fi
+fi
+
+if [[ "$MASK_SECRETS" -eq 1 ]]; then
+  # Only warn people who have key files the mask hides, not everyone without SSH.
+  has_ssh_keys=0
+  for key in "$HOME/.ssh"/id_*; do
+    if [[ -f "$key" && "$key" != *.pub ]]; then
+      has_ssh_keys=1
+      break
+    fi
+  done
+  if [[ "$has_ssh_keys" -eq 1 && "$ssh_rc" -eq 2 ]]; then
+    echo "agent-safe: warning: no ssh-agent found; ~/.ssh private keys are masked, so SSH (git fetch/push over ssh) will fail in the sandbox. Start an agent and ssh-add your keys" >&2
+  elif [[ "$has_ssh_keys" -eq 1 && "$ssh_rc" -eq 1 ]]; then
+    echo "agent-safe: warning: the ssh-agent at $ssh_real holds no keys; run ssh-add so SSH works in the sandbox" >&2
   fi
 fi
 
