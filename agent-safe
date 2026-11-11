@@ -7,7 +7,6 @@ usage() {
   [[ "$code" -eq 0 ]] && out=1
   cat <<'EOF' >&$out
 usage: agent-safe [options] <target|command> [args...]
-       agent-safe [project-dir]           (when invoked as pi-web-safe)
 
 Options must come BEFORE the target; everything after it is passed
 through to the target untouched (so `agent-safe claude --help` shows
@@ -19,7 +18,6 @@ else read-only.
 
 Targets / Modes:
   pi               Run Pi CLI in yolo mode
-  pi-web           Run Pi Web in yolo mode (pnx @agegr/pi-web@latest --hostname 0.0.0.0)
   agy              Run Antigravity CLI (agy --dangerously-skip-permissions)
   claude           Run Claude Code CLI (claude --dangerously-skip-permissions)
   codex            Run Codex CLI (codex --dangerously-bypass-approvals-and-sandbox)
@@ -31,7 +29,6 @@ Targets / Modes:
 
 Multi-call symlink shortcuts:
   pi-safe          -> runs 'pi' mode directly
-  pi-web-safe      -> runs 'pi-web' mode directly
   agy-safe         -> runs 'agy' mode directly
   claude-safe      -> runs 'claude' mode directly
   codex-safe       -> runs 'codex' mode directly
@@ -70,7 +67,6 @@ case "$PROG" in
   # The script's own name (agent-safe, agent-safe.sh, ...) picks nothing; without
   # this, the ".sh" of an agent-safe.sh install matched *sh* below.
   agent-safe*) TARGET="" ;;
-  *pi-web*|*web*) TARGET="pi-web" ;;
   *copilot*) TARGET="copilot" ;;
   *opencode*) TARGET="opencode" ;;
   *pi*)      TARGET="pi" ;;
@@ -159,7 +155,6 @@ while [[ $# -gt 0 ]]; do
       [[ -z "$PROG_TARGET" ]] || break
       case "$1" in
         --pi|pi)                     TARGET="pi" ;;
-        --pi-web|pi-web|--web|web)   TARGET="pi-web" ;;
         --agy|agy)                   TARGET="agy" ;;
         --claude|claude)             TARGET="claude" ;;
         --codex|codex)               TARGET="codex" ;;
@@ -180,11 +175,6 @@ if [[ -z "$TARGET" ]]; then
   usage
 fi
 
-# In pi-web mode, first positional non-flag argument can be project directory
-if [[ "$TARGET" == "pi-web" && $# -gt 0 && "$1" != -* ]]; then
-  PROJECT_DIR="$1"
-  shift
-fi
 # Resolve into a temporary, or the failed assignment would blank $PROJECT_DIR
 # before the error message gets to name it.
 if ! project_dir_real="$(realpath -e -- "$PROJECT_DIR" 2>/dev/null)"; then
@@ -278,11 +268,6 @@ case "$TARGET" in
         ;;
     esac
     ;;
-  pi-web)
-    command -v pnx >/dev/null 2>&1 || { echo "agent-safe: 'pnx' not found in PATH" >&2; exit 1; }
-    ENABLE_PI_YOLO=true
-    RUN_CMD=(pnx --allow-build=@google/genai --allow-build=esbuild --allow-build=node-pty --allow-build=protobufjs "@agegr/pi-web@latest" --hostname 0.0.0.0 "$@")
-    ;;
   agy)
     command -v agy >/dev/null 2>&1 || { echo "agent-safe: 'agy' not found in PATH" >&2; exit 1; }
     RUN_CMD=(agy --dangerously-skip-permissions "$@")
@@ -355,7 +340,7 @@ case "$TARGET" in
 esac
 
 case "$TARGET" in
-  pi|pi-web) mkdir -p "$HOME/.pi" 2>/dev/null || true ;;
+  pi)        mkdir -p "$HOME/.pi" 2>/dev/null || true ;;
   agy)       mkdir -p "$HOME/.gemini" 2>/dev/null || true ;;
   claude)    mkdir -p "$HOME/.claude" 2>/dev/null || true ;;
   codex)     mkdir -p "$HOME/.codex" 2>/dev/null || true ;;
@@ -1528,12 +1513,6 @@ if [[ "$SANDBOX_OK" -eq 0 ]]; then
   exit $?
 fi
 
-if [[ "$TARGET" == "pi-web" ]]; then
-  echo "agent-safe [pi-web]: sandboxed, writable project: $PROJECT_DIR"
-  echo "agent-safe [pi-web]: ~/.pi and build tool caches writable, /tmp tmpfs, everything else read-only"
-  echo "agent-safe [pi-web]: pick $PROJECT_DIR as the session cwd in the pi-web UI"
-else
-  echo "Entering sandbox for $PROJECT_DIR ($TARGET mode)"
-fi
+echo "Entering sandbox for $PROJECT_DIR ($TARGET mode)"
 
 bwrap "${BWRAP_ARGS[@]}" "${RUN_CMD[@]}"

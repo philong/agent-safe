@@ -1,6 +1,6 @@
 # agent-safe
 
-A lightweight bubblewrap sandbox for AI coding agents ([Pi](https://github.com/carderne/pi), [Pi Web](https://github.com/agegr/pi-web), [Antigravity](https://antigravity.google), [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [GitHub Copilot](https://github.com/github/copilot-cli), [Aider](https://aider.chat), and [OpenCode](https://opencode.ai)).
+A lightweight bubblewrap sandbox for AI coding agents ([Pi](https://github.com/carderne/pi), [Antigravity](https://antigravity.google), [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [GitHub Copilot](https://github.com/github/copilot-cli), [Aider](https://aider.chat), and [OpenCode](https://opencode.ai)).
 
 ## Why
 
@@ -47,7 +47,6 @@ Create symlinks to invoke each agent directly:
 
 ```bash
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/pi-safe
-ln -sf ~/.local/bin/agent-safe ~/.local/bin/pi-web-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/agy-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/claude-safe
 ln -sf ~/.local/bin/agent-safe ~/.local/bin/codex-safe
@@ -68,63 +67,56 @@ pi-safe
 # or: agent-safe pi
 ```
 
-### 2. Pi Web (`pi-web`)
-Runs `pnx @agegr/pi-web@latest --hostname 0.0.0.0` in yolo mode:
-```bash
-pi-web-safe [optional-project-dir]
-# or: agent-safe pi-web [optional-project-dir]
-```
-
-### 3. Antigravity CLI (`agy`)
+### 2. Antigravity CLI (`agy`)
 Runs `agy --dangerously-skip-permissions` inside the sandbox (automatically disables `enableTerminalSandbox` during the session to avoid nested namespace conflicts, and restores your setting on exit):
 ```bash
 agy-safe
 # or: agent-safe agy
 ```
 
-### 4. Claude Code CLI (`claude`)
+### 3. Claude Code CLI (`claude`)
 Runs `claude --dangerously-skip-permissions` inside the sandbox:
 ```bash
 claude-safe
 # or: agent-safe claude
 ```
 
-### 5. Codex CLI (`codex`)
+### 4. Codex CLI (`codex`)
 Runs `codex --dangerously-bypass-approvals-and-sandbox` inside the sandbox:
 ```bash
 codex-safe
 # or: agent-safe codex
 ```
 
-### 6. GitHub Copilot CLI (`copilot`)
+### 5. GitHub Copilot CLI (`copilot`)
 Runs `copilot --yolo` inside the sandbox:
 ```bash
 copilot-safe
 # or: agent-safe copilot
 ```
 
-### 7. Aider (`aider`)
+### 6. Aider (`aider`)
 Runs `aider --yes` inside the sandbox:
 ```bash
 aider-safe
 # or: agent-safe aider
 ```
 
-### 8. OpenCode CLI (`opencode`)
+### 7. OpenCode CLI (`opencode`)
 Runs `opencode --auto` inside the sandbox:
 ```bash
 opencode-safe
 # or: agent-safe opencode
 ```
 
-### 9. Interactive Sandboxed Shell
+### 8. Interactive Sandboxed Shell
 Spawn an interactive shell inside the exact sandbox environment:
 ```bash
 agent-safe shell
 # or: agent-safe bash
 ```
 
-### 10. Arbitrary Commands
+### 9. Arbitrary Commands
 Run any tool or command inside the sandbox:
 ```bash
 agent-safe run cargo test
